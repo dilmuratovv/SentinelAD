@@ -1,0 +1,53 @@
+name: SentinelAD
+version: '${project.version}'
+main: uz.sentinel.ad.SentinelADPlugin
+description: Anti-duplication protection for supported Paper servers
+authors: [azicoo]
+website: https://github.com/dilmuratovv/SentinelAD
+api-version: '${sentinel.api}'
+softdepend: [SentinelAC, SentinelGuard, SentinelAX-ray, SentinelAE]
+commands:
+  sad:
+    description: SentinelAD administration
+    aliases: [sentinelad]
+    usage: /sad <help|info|suite|recent|reload|testflag|seal|ledger|inspect|restore>
+permissions:
+  sentinelad.admin:
+    default: op
+    children:
+      sentinelad.seal: true
+      sentinelad.ledger: true
+      sentinelad.inspect: true
+      sentinelad.restore: true
+      sentinelad.alerts: true
+      sentinelad.help: true
+      sentinelad.info: true
+      sentinelad.suite: true
+      sentinelad.recent: true
+      sentinelad.reload: true
+      sentinelad.testflag: true
+  sentinelad.alerts:
+    default: op
+  sentinelad.help:
+    default: op
+  sentinelad.info:
+    default: op
+  sentinelad.suite:
+    default: op
+  sentinelad.recent:
+    default: op
+  sentinelad.reload:
+    default: op
+  sentinelad.testflag:
+    default: op
+  sentinelad.seal:
+    default: op
+  sentinelad.ledger:
+    default: op
+  sentinelad.inspect:
+    default: op
+  sentinelad.restore:
+    default: op
+  sentinelad.bypass:
+    description: Not checked by SentinelAD transfer protection (give to trusted admins only)
+    default: false

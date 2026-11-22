@@ -1,0 +1,123 @@
+# SentinelAD configuration
+
+messages:
+  prefix: "&8[&bSentinelAD&8]&r "
+
+alerts:
+  # Notify online staff (permission: sentinelad.alerts) when a dupe is flagged.
+  staff: true
+  # Also print every flag to the server console.
+  console: true
+  # Minimum seconds between two alerts of the same kind for one player (transfers are still blocked).
+  cooldown-seconds: 30
+
+logging:
+  # Write every flag to plugins/SentinelAD/logs/dupe-YYYY-MM-DD.log
+  enabled: true
+  # Delete log files older than this many days (0 = keep forever).
+  retention-days: 30
+
+suite:
+  # Mention other Sentinel plugins that are not installed yet (console on startup and /sad suite).
+  recommend-companions: true
+
+protection:
+  # Players with sentinelad.bypass are never blocked by the checks below.
+  # Reject a sealed item (see /sad seal) when another copy of the same serial is nearby.
+  sealed-duplicates: true
+  # Stop an open shulker box from being broken or blown up (items could stay in the open view).
+  open-shulker: true
+  falling-block-portals: true
+  oversized-stacks: true
+  # Chest minecarts, hopper minecarts, chest boats and mounts carrying a chest cannot use portals (dimension-change dupes).
+  storage-entity-portals: true
+  # Creative-mode players are not checked (the creative inventory can legitimately clone items).
+  ignore-creative: true
+
+ledger:
+  # Global item ledger: every unstackable item (tools, armor, shulker boxes, ...) gets a unique seal, the ledger
+  # remembers where each seal was last seen, and the same seal in two places at once is a duplicate.
+  # Turning this off on a running server needs a restart to take full effect.
+  enabled: true
+  # Seal every unstackable item automatically the first time it is seen in an inventory.
+  auto-seal: true
+  # Also seal items found inside chests, barrels, hoppers and shulker boxes when their chunk loads.
+  auto-seal-containers: true
+  # What to do with a confirmed duplicate: "remove" deletes the newer copy (a backup is kept, see /sad restore),
+  # "flag" only alerts and logs.
+  on-duplicate: remove
+  # A duplicate must still exist this many ticks after it was first seen (filters short-lived states of other plugins).
+  confirm-delay-ticks: 40
+  # Bursts of clicks/pickups by one player are merged into one scan this many ticks later.
+  click-debounce-ticks: 10
+  # Time budget per tick for scanning inventories.
+  scan-budget-ms: 2
+  # Forget items not seen for this many days (0 = never).
+  retention-days: 60
+  save-interval-seconds: 60
+  # Materials that must never be sealed.
+  exclude-materials: []
+
+stackables:
+  # Stackable items cannot carry a seal. Instead, while a container is open, the watched items in the player and the
+  # container together must not grow (except pickups and hopper transfers).
+  enabled: true
+  # "remove" takes the created amount back from the player (backed up, see /sad restore); "flag" only alerts.
+  on-gain: remove
+  # Smallest unexplained gain that is reported.
+  min-gain: 1
+  # Use "*" in the list to watch every stackable item.
+  materials:
+    - DIAMOND
+    - NETHERITE_INGOT
+    - NETHERITE_SCRAP
+    - ANCIENT_DEBRIS
+    - EMERALD
+    - GOLD_INGOT
+    - IRON_INGOT
+    - COPPER_INGOT
+    - DIAMOND_BLOCK
+    - NETHERITE_BLOCK
+    - EMERALD_BLOCK
+    - GOLD_BLOCK
+    - IRON_BLOCK
+    - ENCHANTED_GOLDEN_APPLE
+    - GOLDEN_APPLE
+    - TNT
+    - END_CRYSTAL
+    - ENDER_PEARL
+    - EXPERIENCE_BOTTLE
+    - NETHER_STAR
+    - ELYTRA
+    - TOTEM_OF_UNDYING
+    - BEACON
+    - DRAGON_EGG
+    - OBSIDIAN
+    - CRYING_OBSIDIAN
+    - RESPAWN_ANCHOR
+    - GLOWSTONE
+    - REDSTONE_BLOCK
+    - LAPIS_BLOCK
+
+item-commands:
+  # Other plugins can create items or copies of sealed items through commands (/give, /kit, clone and item-editor
+  # commands). A duplicate or stackable gain that follows such a command within window-seconds is only flagged
+  # (50% confidence, below SentinelGuard's /sus bar), never removed.
+  enabled: true
+  window-seconds: 10
+  # A player's own command excuses at most one finding per this many minutes, so spamming /kit cannot keep removal
+  # off. Console, RCON and command-block commands are not limited.
+  player-trust-cooldown-minutes: 10
+  # Command labels without "/" or namespace ("essentials:give" matches "give"). Add your kit/clone plugins here.
+  commands: [give, i, item, kit, kits, dupe, clone, copy, more, ie, itemedit, itemeditor, cmi, kitpreview, playerkits,
+             pk, kitgui, item-give, loot, invsee, openinv, restoreinv, backpack, bp]
+
+escalation:
+  # Repeat offenders: after `threshold` serious findings (confidence >= min-confidence) within `window-minutes`,
+  # the console commands below run. %player% and %type% are replaced. Test flags never count.
+  enabled: false
+  min-confidence: 90
+  threshold: 3
+  window-minutes: 30
+  commands: []
+  # Example: - "kick %player% Item duplication detected"
