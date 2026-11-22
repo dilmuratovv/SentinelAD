@@ -6,6 +6,7 @@
 
 An anti-duplication plugin by **azicoo** for Paper servers: a global item ledger that catches duplicated gear wherever it ends up, and conservation checks that take back stackable valuables created from nothing.
 
+[![Build](https://github.com/dilmuratovv/SentinelAD/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/dilmuratovv/SentinelAD/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/dilmuratovv/SentinelAD?color=ec4899&label=release)](https://github.com/dilmuratovv/SentinelAD/releases)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 [![Paper](https://img.shields.io/badge/paper-1.21%20%E2%80%93%2026.3-0ea5e9.svg)](#compatibility)
@@ -23,9 +24,23 @@ Dupe exploits come and go with every Minecraft and plugin update. SentinelAD doe
 
 **One JAR for every supported Paper version** (1.21 to 26.3). Players can join with any client version through ViaVersion/ViaBackwards; everything happens on the server.
 
-SentinelAD is part of the **Sentinel suite** — [SentinelAC](https://github.com/dilmuratovv/SentinelAC) (anticheat), [SentinelGuard](https://github.com/dilmuratovv/SentinelGuard) (moderation), [SentinelAX-ray](https://github.com/dilmuratovv/SentinelAX-ray) (anti-xray) and [SentinelAE](https://github.com/dilmuratovv/SentinelAE) (anti-ESP). Each plugin works on its own; with SentinelGuard 2.2+ installed, SentinelAD findings land in `/sus` automatically.
+It is part of the [Sentinel suite](#sentinel-suite).
 
 **Created and maintained by azicoo.**
+
+## Sentinel suite
+
+Five plugins by **azicoo**, each with its own repository and release. Every one works on its own.
+
+| Plugin | What it does |
+|---|---|
+| [SentinelAC](https://github.com/dilmuratovv/SentinelAC) | Anticheat: prediction-based movement, combat and packet checks. |
+| [SentinelAD](https://github.com/dilmuratovv/SentinelAD) | Anti-dupe: a global item ledger that removes duplicated items. |
+| [SentinelAE](https://github.com/dilmuratovv/SentinelAE) | Anti-ESP: hidden players and armor stands are never sent to the client. |
+| [SentinelAX-ray](https://github.com/dilmuratovv/SentinelAX-ray) | Anti-xray: Paper's native engine set up per world, plus mining analysis. |
+| [SentinelGuard](https://github.com/dilmuratovv/SentinelGuard) | Moderation: bans, mutes, history, `/sus`; collects the flags of AC, AD and AX-ray. |
+
+Together: SentinelGuard adds the findings of SentinelAC, SentinelAD and SentinelAX-ray to `/sus`, and `/sg status` shows the state of SentinelAE and SentinelAX-ray. All five are GPL-3.0 and run on Paper 1.21 to 26.3 with one JAR each (SentinelGuard also has a Velocity JAR).
 
 ## Features
 
@@ -133,7 +148,7 @@ cd SentinelAD
 mvn -B package
 ```
 
-The JAR appears in `target/SentinelAD-<version>-paper.jar`.
+The JAR appears in `plugin/target/SentinelAD-<version>-paper.jar`.
 
 ## Releases
 
