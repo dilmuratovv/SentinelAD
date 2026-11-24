@@ -1,0 +1,6 @@
+name: SentinelADHarness
+version: '1'
+main: uz.sentinel.adtest.DupeHarness
+api-version: '1.21'
+depend: [SentinelAD]
+description: Test-only duplication simulator for SentinelAD. Never install on a real server.

@@ -134,12 +134,33 @@ public final class LedgerStore {
 
     // ------------------------------------------------------------------ persistence
 
-    public List<String> snapshot() {
-        List<String> lines = new ArrayList<>(entries.size());
-        for (Map.Entry<String, Entry> e : entries.entrySet()) {
-            lines.add(e.getKey() + "\t" + (e.getValue().holder == null ? "-" : e.getValue().holder) + "\t" + e.getValue().seen);
+    /** A copy of the ledger that only holds references (cheap on the main thread); see {@link #lines()}. */
+    public record Raw(String[] serials, String[] holders, long[] seen) {
+        public List<String> lines() {
+            List<String> lines = new ArrayList<>(serials.length);
+            for (int i = 0; i < serials.length; i++) {
+                lines.add(serials[i] + "\t" + (holders[i] == null ? "-" : holders[i]) + "\t" + seen[i]);
+            }
+            return lines;
         }
-        return lines;
+    }
+
+    public Raw raw() {
+        int n = entries.size(), i = 0;
+        String[] serials = new String[n], holders = new String[n];
+        long[] seen = new long[n];
+        for (Map.Entry<String, Entry> e : entries.entrySet()) {
+            serials[i] = e.getKey();
+            holders[i] = e.getValue().holder;
+            seen[i++] = e.getValue().seen;
+        }
+        return new Raw(serials, holders, seen);
+    }
+
+    public List<String> snapshot() { return raw().lines(); }
+
+    public static void write(Path file, Raw snapshot, boolean clean, Map<String, Long> worldTimes) throws IOException {
+        write(file, snapshot.lines(), clean, worldTimes);
     }
 
     public static void write(Path file, List<String> snapshot, boolean clean) throws IOException {

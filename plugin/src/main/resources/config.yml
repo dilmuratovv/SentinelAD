@@ -57,6 +57,9 @@ ledger:
   save-interval-seconds: 60
   # Materials that must never be sealed.
   exclude-materials: []
+  # Also skip unstackables that are made and used up all the time and are worth nothing to dupe (filled buckets,
+  # potions, stews, maps, book and quill). Keeps the ledger small on busy servers.
+  exclude-trivial: true
 
 stackables:
   # Stackable items cannot carry a seal. Instead, while a container is open, the watched items in the player and the
@@ -110,7 +113,8 @@ item-commands:
   player-trust-cooldown-minutes: 10
   # Command labels without "/" or namespace ("essentials:give" matches "give"). Add your kit/clone plugins here.
   commands: [give, i, item, kit, kits, dupe, clone, copy, more, ie, itemedit, itemeditor, cmi, kitpreview, playerkits,
-             pk, kitgui, item-give, loot, invsee, openinv, restoreinv, backpack, bp]
+             pk, kitgui, item-give, loot, invsee, openinv, restoreinv, backpack, bp, co, coreprotect, core, rollback,
+             inventoryrollback, ir, invrollback, restore]
 
 escalation:
   # Repeat offenders: after `threshold` serious findings (confidence >= min-confidence) within `window-minutes`,

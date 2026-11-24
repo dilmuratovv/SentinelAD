@@ -18,7 +18,13 @@ import java.util.logging.Level;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.block.BlockState;
-import org.bukkit.block.Container;
+import org.bukkit.block.Block;
+import org.bukkit.event.Event;
+import org.bukkit.event.block.Action;
+import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Item;
@@ -50,7 +56,6 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.Chunk;
 import org.bukkit.Material;
 import org.bukkit.Tag;
-import org.bukkit.loot.Lootable;
 import uz.sentinel.ad.SentinelADPlugin;
 import uz.sentinel.ad.api.DupeType;
 import uz.sentinel.ad.protection.Seal;
@@ -83,6 +88,13 @@ public final class LedgerService implements Listener {
     private final Set<String> pending = new HashSet<>();
     private final Map<String, Long> suppressed = new HashMap<>();
     private final Map<String, UUID> toucher = new HashMap<>();
+    /** Serial -> who threw it on the ground for another player to pick up (trades), so a buyer is not blamed. */
+    private final Map<String, Handover> handovers = new HashMap<>();
+    /** Serial -> when an unverifiable possible duplicate was last reported (alert cooldown, not a suppression). */
+    private final Map<String, Long> unverifiedReported = new HashMap<>();
+
+    private record Handover(UUID from, long at) {}
+    private static final long HANDOVER_MS = 30 * 60 * 1000L;
 
     private volatile boolean enabled;
     private boolean dirty;
@@ -174,7 +186,8 @@ public final class LedgerService implements Listener {
     private void saveAsync() {
         if (!dirty) return;
         dirty = false;
-        List<String> snapshot = store.snapshot();
+        // Only references are copied on the main thread; the text is built in the background.
+        LedgerStore.Raw snapshot = store.raw();
         Map<String, Long> times = worldTimes();
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try { LedgerStore.write(file, snapshot, false, times); }
@@ -189,6 +202,9 @@ public final class LedgerService implements Listener {
         if (n > 0) { dirty = true; plugin.getLogger().info("Ledger pruned " + n + " items not seen for " + days + " days."); }
         suppressed.values().removeIf(t -> System.currentTimeMillis() - t > SUPPRESS_MS);
         if (toucher.size() > 5000) toucher.clear();
+        long nowMs = System.currentTimeMillis();
+        handovers.values().removeIf(h -> nowMs - h.at() > HANDOVER_MS);
+        unverifiedReported.values().removeIf(t -> nowMs - t > SUPPRESS_MS);
         commands.prune(System.currentTimeMillis());
     }
 
@@ -226,7 +242,7 @@ public final class LedgerService implements Listener {
 
     private void enqueueChunk(Chunk chunk) {
         for (BlockState state : chunk.getTileEntities(false)) {
-            if (state instanceof Container && !(state instanceof Lootable l && l.hasLootTable())) enqueue(Holders.blockId(state.getBlock()));
+            if (Holders.storesItems(state)) enqueue(Holders.blockId(state.getBlock()));
         }
     }
 
@@ -287,9 +303,17 @@ public final class LedgerService implements Listener {
         if (pending.contains(key)) return;
         if (!c.previous().equals(scan.id())) {
             Scan old = holders.resolve(c.previous(), false);
-            if (old == null) { // cannot check the other place right now
-                flag(c.serial(), scan.id(), c.previous(), 60, "possible duplicate: " + describe(c.serial()) + " is in "
-                        + holders.describe(scan.id()) + " but was last seen in " + holders.describe(c.previous()) + " (not loaded, unverified)");
+            if (old == null) { // cannot check the other place right now (offline player, unloaded chunk)
+                // Nothing can change in an offline inventory or an unloaded chunk, so the copy there is checked again
+                // as soon as it loads: the ledger now points here, and the old place's next scan clashes with it.
+                // No suppression, so that check can confirm and remove.
+                Long last = unverifiedReported.get(c.serial());
+                if (last == null || now - last > SUPPRESS_MS) {
+                    unverifiedReported.put(c.serial(), now);
+                    report(actorFor(scan.id(), c.previous()), 60, "possible duplicate: " + describe(c.serial()) + " is in "
+                            + holders.describe(scan.id()) + " but was last seen in " + holders.describe(c.previous())
+                            + " (not loaded; checked again when it loads)");
+                }
                 store.moveTo(c.serial(), scan.id(), now);
                 return;
             }
@@ -332,18 +356,42 @@ public final class LedgerService implements Listener {
 
     private void act(String serial, String newId, String oldId, Sighting target) {
         Player actor = actorFor(newId, oldId);
+        Handover handed = handovers.get(serial);
+        if (handed != null && System.currentTimeMillis() - handed.at() < HANDOVER_MS && actor != null
+                && !actor.getUniqueId().equals(handed.from()) && newId.equals(Holders.playerId(actor.getUniqueId()))) {
+            // The player picked this copy up from someone else's drop (a trade): blame the giver, not the receiver.
+            actOn(serial, newId, oldId, target, null, handed.from());
+            return;
+        }
+        actOn(serial, newId, oldId, target, actor, null);
+    }
+
+    private void actOn(String serial, String newId, String oldId, Sighting target, Player actor, UUID giver) {
         boolean ownHolder = actor != null && newId.equals(Holders.playerId(actor.getUniqueId()));
-        if (ownHolder && (actor.getGameMode() == GameMode.CREATIVE || actor.hasPermission(TransferProtection.BYPASS))) {
+        if (giver == null && ownHolder && (actor.getGameMode() == GameMode.CREATIVE || actor.hasPermission(TransferProtection.BYPASS))) {
             if (target.nested()) { suppressed.put(serial, System.currentTimeMillis()); return; }
             if (holders.restamp(newId, serial, target.slot())) { restamped++; return; }
         }
         String what = describe(serial);
         String detail = what + " exists in two places: " + holders.describe(newId) + " and " + holders.describe(oldId);
         boolean remove = plugin.getConfig().getString("ledger.on-duplicate", "remove").equalsIgnoreCase("remove");
-        if (remove && commands.explains(actor == null ? null : actor.getUniqueId(), System.currentTimeMillis())) {
-            // Another plugin's item command (kit, clone, item editor...) may have made this copy: alert, never delete.
-            suppressed.put(serial, System.currentTimeMillis());
-            report(actor, 50, "possible duplicate right after an item command, not removed: " + detail);
+        long nowMs = System.currentTimeMillis();
+        UUID blamed = giver != null ? giver : actor == null ? null : actor.getUniqueId();
+        CommandActivity.Excuse excuse = remove ? commands.excuse(blamed, nowMs, nowMs)
+                : CommandActivity.Excuse.NONE;
+        if (excuse == CommandActivity.Excuse.TRUSTED) {
+            // Console or staff ran an item command for this player (kit with saved items, rollback, /give): the copy is
+            // intended, so it becomes an item of its own. Staff still see it in /sus.
+            if (!target.nested() && holders.restamp(newId, serial, target.slot())) restamped++;
+            else suppressed.put(serial, nowMs);
+            report(actor, 60, "copy right after a console/staff item command, re-sealed as a new item: " + detail);
+            return;
+        }
+        if (excuse == CommandActivity.Excuse.OWN) {
+            // The player's own kit/item command may have made this copy: not removed now. Checked again once the
+            // suppression ends; the player's trust is used up by then, so a real duplicate is removed.
+            suppressed.put(serial, nowMs);
+            report(actor, 60, "possible duplicate right after the player's own item command, not removed yet: " + detail);
             return;
         }
         boolean done = false;
@@ -363,12 +411,13 @@ public final class LedgerService implements Listener {
         }
         // After a removal the copy is gone, so a new copy is a new event; otherwise do not repeat the alert for a while.
         if (!done) suppressed.put(serial, System.currentTimeMillis());
+        if (giver != null) {
+            org.bukkit.OfflinePlayer g = Bukkit.getOfflinePlayer(giver);
+            plugin.reporter().report(giver, g.getName() == null ? giver.toString() : g.getName(), DupeType.LEDGER_MISMATCH, 100,
+                    detail + " (the copy was handed over by this player)", false);
+            return;
+        }
         report(actor, 100, detail);
-    }
-
-    private void flag(String serial, String newId, String oldId, int confidence, String detail) {
-        suppressed.put(serial, System.currentTimeMillis());
-        report(actorFor(newId, oldId), confidence, detail);
     }
 
     private void report(Player actor, int confidence, String detail) {
@@ -472,7 +521,75 @@ public final class LedgerService implements Listener {
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void pickup(EntityPickupItemEvent e) {
-        if (enabled && e.getEntity() instanceof Player p) enqueuePlayerSoon(p);
+        if (!enabled) return;
+        if (e.getEntity() instanceof Player p) {
+            UUID thrower = e.getItem().getThrower();
+            if (thrower != null && !thrower.equals(p.getUniqueId())) {
+                java.util.List<Sighting> got = new java.util.ArrayList<>();
+                scanner.collect(e.getItem().getItemStack(), 0, false, got, null);
+                long now = System.currentTimeMillis();
+                for (Sighting s : got) handovers.put(s.serial(), new Handover(thrower, now));
+            }
+            enqueuePlayerSoon(p);
+        } else if (interesting(e.getItem().getItemStack())) {
+            // A mob (zombie, fox, allay, piglin...) picked it up: it now holds the item.
+            Entity mob = e.getEntity();
+            Bukkit.getScheduler().runTask(plugin, () -> { if (mob.isValid()) enqueue(Holders.entityId(mob.getUniqueId())); });
+        }
+    }
+
+    /** Giving an item to an allay, putting armor on a horse, a disc into a jukebox, a book onto a lectern or shelf... */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void interactEntity(PlayerInteractEntityEvent e) {
+        if (!enabled || e.getRightClicked() instanceof Player || !(e.getRightClicked() instanceof LivingEntity)) return;
+        String id = Holders.entityId(e.getRightClicked().getUniqueId());
+        toucher.put(id, e.getPlayer().getUniqueId());
+        Player p = e.getPlayer();
+        Bukkit.getScheduler().runTask(plugin, () -> { enqueuePlayer(p); enqueue(id); });
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR) public void interactBlock(PlayerInteractEvent e) {
+        if (!enabled || e.getAction() != Action.RIGHT_CLICK_BLOCK || e.getClickedBlock() == null
+                || e.useInteractedBlock() == Event.Result.DENY) return;
+        Block b = e.getClickedBlock();
+        // Chests and the like are handled by the inventory events; these blocks take items without an inventory view.
+        switch (b.getType().name()) {
+            case "JUKEBOX", "LECTERN", "CHISELED_BOOKSHELF", "DECORATED_POT" -> { }
+            default -> { return; }
+        }
+        String id = Holders.blockId(b);
+        toucher.put(id, e.getPlayer().getUniqueId());
+        Player p = e.getPlayer();
+        Bukkit.getScheduler().runTask(plugin, () -> { enqueuePlayer(p); enqueue(id); });
+    }
+
+    /**
+     * Placing a sealed block item (a shulker box) whose other copy still exists elsewhere is refused at once: a
+     * duplicated shulker placed as a block would otherwise be emptied before the ledger removes the item.
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true) public void place(BlockPlaceEvent e) {
+        if (!enabled) return;
+        String serial = seal.read(e.getItemInHand());
+        if (serial == null) return;
+        Player p = e.getPlayer();
+        if (p.getGameMode() == GameMode.CREATIVE || p.hasPermission(TransferProtection.BYPASS)) return;
+        String own = Holders.playerId(p.getUniqueId());
+        Scan mine = holders.player(p, false);
+        boolean duplicate = mine.count(serial) > 1;
+        String elsewhere = null;
+        if (!duplicate) {
+            String holder = store.holderOf(serial);
+            if (holder != null && !holder.equals(own)) {
+                Scan other = holders.resolve(holder, false);
+                if (other != null && other.contains(serial)) { duplicate = true; elsewhere = holder; }
+            }
+        }
+        if (!duplicate) return;
+        e.setCancelled(true);
+        enqueue(own);
+        Long until = suppressed.get(serial);
+        if (until != null && System.currentTimeMillis() - until < SUPPRESS_MS) return;
+        report(p, 100, "blocked placing a duplicated " + describe(serial) + " (another copy is in "
+                + (elsewhere == null ? "the same inventory" : holders.describe(elsewhere)) + ")");
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void drop(PlayerDropItemEvent e) {
@@ -500,14 +617,15 @@ public final class LedgerService implements Listener {
     @EventHandler public void chunkUnload(ChunkUnloadEvent e) {
         if (!enabled) return;
         for (BlockState state : e.getChunk().getTileEntities(false)) {
-            if (state instanceof Container && !(state instanceof Lootable l && l.hasLootTable())) process(holders.block(state.getBlock(), false));
+            if (Holders.storesItems(state)) process(holders.block(state.getBlock(), false));
         }
     }
 
     /** Armor stands, frames and storage entities are checked right after they appear and whenever a player changes them. */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void entitySpawn(EntitySpawnEvent e) {
         Entity en = e.getEntity();
-        if (!enabled || !(en instanceof ArmorStand || en instanceof ItemFrame || (en instanceof InventoryHolder && !(en instanceof Player)))) return;
+        if (!enabled || !(en instanceof ArmorStand || en instanceof ItemFrame || (en instanceof InventoryHolder && !(en instanceof Player))
+                || en instanceof LivingEntity l && !(en instanceof Player) && Holders.holdsItems(l))) return;
         Bukkit.getScheduler().runTask(plugin, () -> { if (en.isValid()) enqueue(Holders.entityId(en.getUniqueId())); });
     }
 
@@ -527,7 +645,8 @@ public final class LedgerService implements Listener {
         if (!enabled) return;
         for (Entity en : e.getEntities()) {
             if (en instanceof Item || en instanceof ItemFrame || en instanceof ArmorStand
-                    || (en instanceof InventoryHolder && !(en instanceof Player))) enqueue(Holders.entityId(en.getUniqueId()));
+                    || (en instanceof InventoryHolder && !(en instanceof Player))
+                    || (en instanceof LivingEntity l && !(en instanceof Player) && Holders.holdsItems(l))) enqueue(Holders.entityId(en.getUniqueId()));
         }
     }
 }

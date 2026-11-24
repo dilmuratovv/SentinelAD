@@ -70,6 +70,10 @@ public final class SentinelADPlugin extends JavaPlugin {
         }
 
         getLogger().info("SentinelAD " + getPluginMeta().getVersion() + " enabled on Minecraft " + version + ".");
+        for (String setting : uz.sentinel.ad.diagnostics.PaperExploitAudit.check(new java.io.File("."))) {
+            getLogger().warning("config/paper-global.yml has " + setting + ": true. This re-enables a duplication or block-break"
+                    + " exploit that Paper fixes; stackable items made that way are not tracked. Set it to false unless you need it.");
+        }
         announceSuite();
     }
 

@@ -8,16 +8,18 @@ import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Chest;
-import org.bukkit.block.Container;
 import org.bukkit.block.ShulkerBox;
 import org.bukkit.block.DoubleChest;
-import org.bukkit.entity.ArmorStand;
+import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Item;
 import org.bukkit.entity.ItemFrame;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.inventory.BlockInventoryHolder;
+import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
@@ -35,8 +37,12 @@ public final class Holders {
         void set(ItemStack item);
     }
 
-    private static final EquipmentSlot[] STAND_SLOTS = {EquipmentSlot.HAND, EquipmentSlot.OFF_HAND,
-            EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET};
+    /** Every equipment slot of this server version (1.21 has BODY, 26.x also SADDLE). */
+    private static final EquipmentSlot[] EQUIPMENT = EquipmentSlot.values();
+    /** Slot numbers of equipment in holders that also have an inventory (allay, horse...): 1000 + slot ordinal. */
+    static final int EQUIPMENT_BASE = 1000;
+    /** Slot numbers of a player's transient work view (crafting grid, anvil, smithing...): 2000 + raw slot. */
+    static final int VIEW_BASE = 2000;
 
     private final ItemScanner scanner;
     private final Seal seal;
@@ -82,7 +88,26 @@ public final class Holders {
         List<Sighting> out = new ArrayList<>();
         scanner.scan(p.getInventory(), stamp, out);
         scanner.collect(p.getItemOnCursor(), -1, false, out, null);
+        // Items in a crafting grid, anvil, smithing table... belong to the player until the view closes; a copy hidden
+        // there must not be invisible. Result slots only preview an item (an anvil result carries the input's seal).
+        InventoryView view = p.getOpenInventory();
+        Inventory top = view.getTopInventory();
+        if (workView(top.getType())) {
+            for (int raw = 0; raw < top.getSize(); raw++) {
+                if (view.getSlotType(raw) == InventoryType.SlotType.RESULT) continue;
+                scanner.collect(top.getItem(raw), VIEW_BASE + raw, false, out, null);
+            }
+        }
         return new Scan(playerId(p.getUniqueId()), out);
+    }
+
+    /** Player-owned work views whose items go back to the player when the view closes. */
+    static boolean workView(InventoryType type) {
+        return switch (type) {
+            case CRAFTING, WORKBENCH, ANVIL, SMITHING, GRINDSTONE, STONECUTTER, LOOM, CARTOGRAPHY, ENCHANTING, BEACON,
+                 MERCHANT -> true;
+            default -> false;
+        };
     }
 
     public Scan ender(Player p, boolean stamp) {
@@ -91,10 +116,19 @@ public final class Holders {
         return new Scan(enderId(p.getUniqueId()), out);
     }
 
-    private static Inventory containerInventory(BlockState state) {
-        if (!(state instanceof Container c)) return null;
+    /**
+     * Inventory of any block that stores items: containers (chest, barrel, furnace, brewing stand, crafter...) and
+     * jukebox, lectern, chiseled bookshelf, decorated pot. Null for other blocks and unopened loot containers.
+     */
+    static Inventory containerInventory(BlockState state) {
+        if (!(state instanceof BlockInventoryHolder c)) return null;
         if (state instanceof Lootable l && l.hasLootTable()) return null; // never trigger loot generation
         return c instanceof Chest ch ? ch.getBlockInventory() : c.getInventory();
+    }
+
+    /** True for block states that {@link #containerInventory} can read. */
+    public static boolean storesItems(BlockState state) {
+        return state instanceof BlockInventoryHolder && !(state instanceof Lootable l && l.hasLootTable());
     }
 
     private boolean stampable(Inventory inv) {
@@ -119,16 +153,33 @@ public final class Holders {
         } else if (e instanceof ItemFrame frame) {
             ItemStack s = frame.getItem();
             scanner.collect(s, 0, stamp, out, () -> frame.setItem(s, false));
-        } else if (e instanceof ArmorStand stand) {
-            for (int i = 0; i < STAND_SLOTS.length; i++) {
-                EquipmentSlot slot = STAND_SLOTS[i];
-                ItemStack s = stand.getEquipment().getItem(slot);
-                scanner.collect(s, i, stamp, out, () -> stand.getEquipment().setItem(slot, s));
+        } else if (!(e instanceof Player)) {
+            if (e instanceof InventoryHolder h) scanner.scan(h.getInventory(), stamp, out);
+            // Armor stands, and mobs holding or wearing items (zombie with a sword, allay, fox, horse armor...).
+            if (e instanceof LivingEntity living && living.getEquipment() != null) {
+                EntityEquipment eq = living.getEquipment();
+                for (EquipmentSlot slot : EQUIPMENT) {
+                    ItemStack s = equipment(eq, slot);
+                    if (s != null) scanner.collect(s, EQUIPMENT_BASE + slot.ordinal(), stamp, out, () -> eq.setItem(slot, s));
+                }
             }
-        } else if (e instanceof InventoryHolder h && !(e instanceof Player)) {
-            scanner.scan(h.getInventory(), stamp, out);
         }
         return new Scan(entityId(e.getUniqueId()), out);
+    }
+
+    private static ItemStack equipment(EntityEquipment eq, EquipmentSlot slot) {
+        try { return eq.getItem(slot); } catch (RuntimeException e) { return null; } // slot this entity does not have
+    }
+
+    /** True when a mob or stand wears or holds something worth tracking. */
+    public static boolean holdsItems(LivingEntity living) {
+        EntityEquipment eq = living.getEquipment();
+        if (eq == null) return false;
+        for (EquipmentSlot slot : EQUIPMENT) {
+            ItemStack s = equipment(eq, slot);
+            if (s != null && !s.getType().isAir() && (s.getMaxStackSize() == 1 || ItemScanner.isContainerItem(s.getType()))) return true;
+        }
+        return false;
     }
 
     /**
@@ -175,6 +226,10 @@ public final class Holders {
                         public ItemStack get() { return pl.getItemOnCursor(); }
                         public void set(ItemStack i) { pl.setItemOnCursor(i); }
                     };
+                    if (slot >= VIEW_BASE) {
+                        Inventory top = pl.getOpenInventory().getTopInventory();
+                        return workView(top.getType()) ? inv(top, slot - VIEW_BASE) : null;
+                    }
                     return inv(pl.getInventory(), slot);
                 }
                 case "N": { Player pl = Bukkit.getPlayer(UUID.fromString(p[1])); return pl == null ? null : inv(pl.getEnderChest(), slot); }
@@ -196,10 +251,15 @@ public final class Holders {
                         public ItemStack get() { return f.getItem(); }
                         public void set(ItemStack i) { f.setItem(i, false); }
                     };
-                    if (e instanceof ArmorStand a && slot >= 0 && slot < STAND_SLOTS.length) return new Ref() {
-                        public ItemStack get() { return a.getEquipment().getItem(STAND_SLOTS[slot]); }
-                        public void set(ItemStack i) { a.getEquipment().setItem(STAND_SLOTS[slot], i); }
-                    };
+                    if (slot >= EQUIPMENT_BASE && slot - EQUIPMENT_BASE < EQUIPMENT.length && e instanceof LivingEntity l
+                            && l.getEquipment() != null) {
+                        EquipmentSlot es = EQUIPMENT[slot - EQUIPMENT_BASE];
+                        EntityEquipment eq = l.getEquipment();
+                        return new Ref() {
+                            public ItemStack get() { return equipment(eq, es); }
+                            public void set(ItemStack i) { eq.setItem(es, i); }
+                        };
+                    }
                     if (e instanceof InventoryHolder h) return inv(h.getInventory(), slot);
                     return null;
                 }

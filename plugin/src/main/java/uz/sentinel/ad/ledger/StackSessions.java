@@ -78,11 +78,21 @@ public final class StackSessions implements Listener {
         return watched.contains(m) || (watchAll && !m.isAir() && m.isItem() && m.getMaxStackSize() > 1);
     }
 
-    private boolean allowed(InventoryType type) {
+    /**
+     * Only real storage: a block or storage entity in the world (it has a location) or the player's ender chest.
+     * Plugin menus (shops, auction houses, crates, kit menus) are also CHEST inventories, but they hand out items
+     * by design, so counting them would take legitimately bought or claimed items away.
+     */
+    static boolean allowed(InventoryType type, boolean inWorld) {
         return switch (type) {
-            case CHEST, BARREL, SHULKER_BOX, HOPPER, DROPPER, DISPENSER, ENDER_CHEST -> true;
+            case ENDER_CHEST -> true;
+            case CHEST, BARREL, SHULKER_BOX, HOPPER, DROPPER, DISPENSER -> inWorld;
             default -> false;
         };
+    }
+
+    private static boolean inWorld(Inventory inventory) {
+        try { return inventory.getLocation() != null; } catch (RuntimeException e) { return false; }
     }
 
     private EnumMap<Material, Integer> count(Player p, Inventory top) {
@@ -93,9 +103,20 @@ public final class StackSessions implements Listener {
         return totals;
     }
 
-    private void add(EnumMap<Material, Integer> totals, ItemStack[] items) {
+    private void add(EnumMap<Material, Integer> totals, ItemStack[] items) { add(totals, items, 0); }
+
+    /**
+     * Counts watched items, including those inside bundles and shulker boxes: taking diamonds out of a bundle while a
+     * chest is open moves them, it does not create them.
+     */
+    private void add(EnumMap<Material, Integer> totals, ItemStack[] items, int depth) {
         for (ItemStack i : items) {
-            if (i != null && watching(i.getType())) totals.merge(i.getType(), i.getAmount(), Integer::sum);
+            if (i == null || i.getType().isAir()) continue;
+            if (watching(i.getType())) totals.merge(i.getType(), i.getAmount(), Integer::sum);
+            if (depth < 3) {
+                ItemStack[] inside = ItemScanner.contents(i);
+                if (inside != null) add(totals, inside, depth + 1);
+            }
         }
     }
 
@@ -109,7 +130,7 @@ public final class StackSessions implements Listener {
     public void open(InventoryOpenEvent e) {
         if (!enabled || !(e.getPlayer() instanceof Player p)) return;
         Inventory top = e.getInventory();
-        if (!allowed(top.getType()) || p.getGameMode() == GameMode.CREATIVE || p.hasPermission(TransferProtection.BYPASS)) return;
+        if (!allowed(top.getType(), inWorld(top)) ||p.getGameMode() == GameMode.CREATIVE || p.hasPermission(TransferProtection.BYPASS)) return;
         Set<String> area = areaOf(top, p);
         // Someone else already in the same container makes the arithmetic meaningless for both.
         for (Session s : sessions.values()) {

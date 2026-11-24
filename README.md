@@ -47,13 +47,13 @@ Together: SentinelGuard adds the findings of SentinelAC, SentinelAD and Sentinel
 | Area | What SentinelAD provides |
 |---|---|
 | **Global ledger** | Weapons, armor, tools, shulker boxes and every other unstackable item get a unique seal the first time they are seen. |
-| **Everywhere** | Player inventories, ender chests, containers, ground items, item frames, armor stands, chest minecarts and mounts — including items inside shulker boxes and bundles. |
-| **Safe removal** | A duplicate is re-checked after a short delay, only the new copy is removed, and it is backed up: `/sad restore <id>` gives it back. |
+| **Everywhere** | Player inventories (also the crafting grid, anvil and other work slots), ender chests, every block that stores items (chests, furnaces, crafters, jukeboxes, lecterns, chiseled bookshelves, decorated pots...), ground items, item frames, armor stands, storage entities, and what mobs hold or wear (allays, zombies, foxes, horse armor) — including items inside shulker boxes and bundles. |
+| **Safe removal** | A duplicate is re-checked after a short delay, only the new copy is removed, and it is backed up: `/sad restore <id>` gives it back. A copy picked up from another player's drop is blamed on the player who dropped it, not the receiver; a duplicated shulker box cannot be placed as a block. |
 | **Stackables** | While a container is open, watched valuables (diamonds, netherite, totems...) in player + container must not grow; items created from nothing are taken back (backed up). |
 | **Event blocks** | Sealed copies, oversized stacks, breaking an open shulker, falling-block portals and storage entities going through portals. |
-| **Other plugins** | `/give`, `/kit`, `/item`, clone and item-editor commands never cause a removal — only a low-confidence alert. |
+| **Other plugins** | `/give`, `/kit`, `/item`, clone, item-editor and rollback commands never cause a removal — only a staff alert. A command must exist and be allowed for the player, so typing `/i` is no excuse. |
 | **Rollback aware** | A world restored from a backup is detected on start; item locations are rebuilt automatically. |
-| **Light** | A per-tick scan budget; 60 bots clicking ~2,400 times per second kept the tick around 5–6 ms in testing. |
+| **Light** | A per-tick scan budget; 60 bots clicking ~2,400 times per second kept the tick around 5–6 ms in testing. Buckets, potions, stews and maps are not sealed (`ledger.exclude-trivial`), and saving copies only references on the main thread. |
 
 ## How it works
 
@@ -70,11 +70,15 @@ When a serial is found in a second holder, SentinelAD checks both places live. I
 
 Stackables cannot carry a serial, so they are protected by **conservation**: while a player has a chest, barrel, shulker box, hopper, dropper, dispenser or ender chest open, the watched items in player + container must not grow, except by pickups and hopper transfers. An unexplained gain is taken back and backed up (`stackables.on-gain: remove`), or only reported (`flag`).
 
-### 3. Item commands (new in 1.2)
+### 3. Item commands
 
-Plugins can create items or copies of sealed items through commands, which looks exactly like a dupe. A finding that follows an item command (`/give`, `/kit`, `/item`, clone and item-editor commands, also inside `/execute ... run`) within `item-commands.window-seconds`, or while the container was open, is **never removed** — only flagged at 50%, below SentinelGuard's `/sus` bar.
+Plugins can create items or copies of sealed items through commands, which looks exactly like a dupe. A finding that follows an item command (`/give`, `/kit`, `/item`, clone, item-editor and rollback commands, also inside `/execute ... run`) within `item-commands.window-seconds`, or while the container was open, is **not removed** but flagged at 60% (visible in SentinelGuard `/sus`).
 
-A player's own command excuses at most **one** finding per `player-trust-cooldown-minutes`, so spamming `/kit` cannot switch removal off. Console, RCON and command blocks are not limited. Add your own kit and clone commands to `item-commands.commands`.
+- **1.3:** a player's command counts only when it exists and the player may run it. Typing `/i` on a server without such a command, or without permission, excuses nothing.
+- A player's own command excuses at most **one** finding per `player-trust-cooldown-minutes`, so spamming `/kit` cannot switch removal off. The copy is checked again later and removed if it is still a duplicate.
+- Console, RCON, command blocks and staff (op or `sentinelad.bypass`) are trusted, but **only for the players the command names** (1.3): a vote plugin running `give Alice ...` does not hide Bob's dupe. A selector (`@a`) or a rollback tool (`/co rollback`, `/restoreinv`...) excuses everyone. A copy made that way is re-sealed as an item of its own.
+
+Add your own kit and clone commands to `item-commands.commands`.
 
 ### 4. World rollbacks (new in 1.2)
 
@@ -133,7 +137,8 @@ The JAR is compiled against the oldest supported API (Paper 1.21); every class a
 
 ### Good to know
 
-- Stackable gains outside an open container (a `/give`, an item on the ground) are not detected: conservation needs a boundary.
+- Stackable gains outside an open container (a `/give`, an item on the ground, piston/TNT machines) are not detected: conservation needs a boundary. Paper fixes the classic piston/TNT/rail/carpet dupes; SentinelAD warns at startup when `config/paper-global.yml` switches them back on (`unsupported-settings`).
+- A copy in an offline player's inventory or an unloaded chunk is reported at 60% at once and checked again when it loads (1.3); the ledger is per server, so a copy carried to another server (HuskSync, a network) is not compared.
 - A plugin that hands out items **without a command** (a GUI shop, an API call) while a container is open can still trigger a stackable removal; use `stackables.on-gain: flag` there. The same goes for plugins that copy sealed items without a command: use `ledger.on-duplicate: flag`.
 - Do not restore `plugins/SentinelAD/` together with a world backup, or run `/sad ledger reset` after doing so; otherwise the rollback cannot be seen.
 - Sealing adds `custom_data` to items; plugins that compare item NBT exactly may see sealed items as different (`ledger.auto-seal: false`).
