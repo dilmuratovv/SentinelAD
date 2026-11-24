@@ -1,14 +1,16 @@
 // Test-only bot that joins a localhost server, stands still and rejoins after a kick.
-// usage: node bot.cjs <port> <name> [version]
+// usage: node bot.cjs <port[,port2]> <name> [version]
 const mc = require('minecraft-protocol');
-const port = Number(process.argv[2]);
-if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('localhost port required');
+// One port, or "portA,portB": every reconnect goes to the next one (a player switching servers).
+const ports = String(process.argv[2]).split(',').map(Number);
+if (!ports.every(p => Number.isInteger(p) && p > 0 && p < 65536)) throw new Error('localhost port(s) required');
 const name = process.argv[3] || 'Bot';
 const version = process.argv[4] || '26.1';
 const toServer = require('minecraft-data')(version).protocol.play.toServer.types;
 const usesFlags = toServer.packet_position[1].some(field => field.name === 'flags');
 let joins = 0;
 function connect() {
+  const port = ports[joins % ports.length];
   joins++;
   const client = mc.createClient({host: '127.0.0.1', port, username: name, version, auth: 'offline'});
   let position = null;

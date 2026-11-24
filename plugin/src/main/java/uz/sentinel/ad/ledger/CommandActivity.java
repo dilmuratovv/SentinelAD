@@ -123,7 +123,7 @@ public final class CommandActivity implements Listener {
         trustedCommand.put(player, now);
         if (named == null && !(commandLine.contains("@") || looksGlobal(commandLine))) {
             UUID[] byName = offlineTargets(commandLine);
-            for (UUID id : byName) namedAt.put(id, now);
+            for (UUID id : byName) named(id, now);
         }
         if (named == null) {
             // Staff running a command for themselves ("/kit", "/i diamond_sword") only explains their own inventory.
@@ -131,7 +131,7 @@ public final class CommandActivity implements Listener {
             if (commandLine.contains("@") || looksGlobal(commandLine)) globalCommand = now;
             return;
         }
-        for (UUID id : named) { trustedCommand.put(id, now); namedAt.put(id, now); }
+        for (UUID id : named) { trustedCommand.put(id, now); named(id, now); }
     }
 
     /** Offline players named by a command (an admin editing an offline inventory); resolved lazily, may be empty. */
@@ -149,6 +149,12 @@ public final class CommandActivity implements Listener {
     }
 
     private Function<String, UUID> offlineResolver;
+    private java.util.function.Consumer<UUID> onNamed = id -> { };
+
+    /** Called whenever a trusted command names a player (shared with other servers by the network store). */
+    public void onNamed(java.util.function.Consumer<UUID> listener) { this.onNamed = listener; }
+
+    private void named(UUID id, long now) { namedAt.put(id, now); onNamed.accept(id); }
 
     /** Name -> UUID of players who have played here (cached by the server); null in tests. */
     public void offlineResolver(Function<String, UUID> resolver) { this.offlineResolver = resolver; }
@@ -182,11 +188,11 @@ public final class CommandActivity implements Listener {
         if (named == null) {
             UUID[] byName = offlineTargets(commandLine);
             // A command for an offline player ("give Bob ..." while Bob is away) explains nothing about players online.
-            if (byName.length > 0 && !commandLine.contains("@")) { for (UUID id : byName) namedAt.put(id, now); return; }
+            if (byName.length > 0 && !commandLine.contains("@")) { for (UUID id : byName) named(id, now); return; }
             globalCommand = now;
             return;
         }
-        for (UUID id : named) { trustedCommand.put(id, now); namedAt.put(id, now); }
+        for (UUID id : named) { trustedCommand.put(id, now); named(id, now); }
     }
 
     /** Why a finding may be explained: not at all, by the player's own command, or by a trusted one (console, staff). */

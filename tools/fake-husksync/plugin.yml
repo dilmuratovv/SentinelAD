@@ -1,0 +1,5 @@
+name: HuskSync
+version: 'test'
+main: uz.sentinel.adtest.FakeSync
+api-version: '1.21'
+description: Test-only HuskSync stand-in for SentinelAD's network test. Never install on a real server.

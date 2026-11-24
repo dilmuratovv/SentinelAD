@@ -42,6 +42,7 @@ public final class StackSessions implements Listener {
         final EnumMap<Material, Integer> before;
         final EnumMap<Material, Integer> flow = new EnumMap<>(Material.class);
         java.util.Map<String, Integer> topBefore = java.util.Map.of();
+        java.util.Map<String, Integer> playerBefore = java.util.Map.of();
         final long opened = System.currentTimeMillis();
         boolean tainted;
         Session(UUID player, Inventory top, Set<String> area, EnumMap<Material, Integer> before) {
@@ -54,6 +55,18 @@ public final class StackSessions implements Listener {
     private final CommandActivity commands;
     private final Map<UUID, Session> sessions = new HashMap<>();
     private volatile ChunkAudit audit;
+    private volatile CrashJournal journal;
+
+    public void journal(CrashJournal journal) { this.journal = journal; }
+
+    /** Watched items the player owns: inventory, cursor and ender chest. */
+    public java.util.Map<String, Integer> playerCount(Player p) {
+        java.util.Map<String, Integer> m = new java.util.TreeMap<>();
+        countInto(m, p.getInventory().getContents());
+        countInto(m, new ItemStack[]{p.getItemOnCursor()});
+        countInto(m, p.getEnderChest().getContents());
+        return m;
+    }
 
     public void audit(ChunkAudit audit) { this.audit = audit; }
 
@@ -180,6 +193,7 @@ public final class StackSessions implements Listener {
         }
         Session s = new Session(p.getUniqueId(), top, area, count(p, top));
         s.topBefore = topCount(top);
+        s.playerBefore = playerCount(p);
         for (Session other : sessions.values()) {
             if (!java.util.Collections.disjoint(other.area, area) || other.top == top) { s.tainted = true; other.tainted = true; }
         }
@@ -193,8 +207,19 @@ public final class StackSessions implements Listener {
         if (s == null || !enabled) return;
         // A container in the world that lost watched items to this player: remember who emptied that chunk.
         ChunkAudit a = audit;
-        if (a != null && s.top.getLocation() != null && !Amounts.gains(topCount(s.top), s.topBefore, 1).isEmpty()) {
-            a.took(s.top.getLocation().getChunk(), p.getUniqueId());
+        org.bukkit.Location where = s.top.getType() == InventoryType.ENDER_CHEST ? null : s.top.getLocation();
+        if (where != null) {
+            java.util.Map<String, Integer> topAfter = topCount(s.top);
+            java.util.Map<String, Integer> taken = Amounts.gains(topAfter, s.topBefore, 1);
+            if (a != null && !taken.isEmpty()) a.took(where.getChunk(), p.getUniqueId());
+            CrashJournal j = journal;
+            if (j != null) {
+                for (var t : taken.entrySet()) {
+                    j.tookFromContainer(where, p.getUniqueId(), t.getKey(), t.getValue(), topAfter.getOrDefault(t.getKey(), 0),
+                            s.playerBefore.getOrDefault(t.getKey(), 0));
+                }
+                for (var g : Amounts.gains(s.topBefore, topAfter, 1).entrySet()) j.containerNow(where, g.getKey(), topAfter.get(g.getKey()));
+            }
         }
         if (s.tainted) return;
         EnumMap<Material, Integer> after = count(p, s.top);

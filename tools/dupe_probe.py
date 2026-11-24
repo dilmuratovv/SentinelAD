@@ -24,6 +24,7 @@ def main():
     p.add_argument('--work', type=Path, required=True)
     p.add_argument('--client-version', default='26.1')
     p.add_argument('--paper-audit', action='store_true', help='also restart with a dupe-enabling Paper setting')
+    p.add_argument('--crash-test', action='store_true', help='kill the server with SIGKILL mid-game and check the crash journal')
     p.add_argument('--accept-eula', action='store_true')
     a = p.parse_args()
     if not a.accept_eula:
@@ -46,7 +47,7 @@ def main():
         'generate-structures=false\nlevel-type=minecraft:flat\nspawn-protection=0\ndifficulty=peaceful\nspawn-monsters=false\n')
 
     def start():
-        proc = subprocess.Popen([a.java, '-Xms512M', '-Xmx1536M', '-jar', str(a.paper.resolve()), '--nogui'], cwd=server,
+        proc = subprocess.Popen([a.java, '-Xms512M', '-Xmx1G', '-jar', str(a.paper.resolve()), '--nogui'], cwd=server,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         lines = queue.Queue()
         threading.Thread(target=lambda: [lines.put(l) for l in proc.stdout], daemon=True).start()
@@ -73,6 +74,8 @@ def main():
             proc.kill()
 
     env = dict(os.environ)
+    if a.crash_test:
+        return crash_test(a, server, port, start, wait, stop, log, env)
     bots = []
     proc, lines = start()
     ok = False
@@ -110,6 +113,36 @@ def main():
         print(('PASS' if warned else 'FAIL') + ' paper-audit-warning')
         (a.work / 'server-output.log').write_text(''.join(log))
     return 0 if ok and 'FAIL' not in results else 1
+
+
+def crash_test(a, server, port, start, wait, stop, log, env):
+    """Phase 1 takes items and logs Alice out, then the server is killed (SIGKILL, no save); phase 2 checks."""
+    phase = server / 'plugins' / 'SentinelADHarness'
+    phase.mkdir(parents=True, exist_ok=True)
+    result = 'FAIL crash-rollback-dupe: no result'
+    for n in ('1', '2'):
+        (phase / 'crash-phase').write_text(n)
+        proc, lines = start()
+        bots = []
+        try:
+            wait(lines, 'Done (', 300)
+            for name in ('Alice', 'Bob'):
+                bots.append(subprocess.Popen(['node', str(BOT), str(port), name, a.client_version], env=env,
+                                             stdout=open(a.work / f'{name}-{n}.log', 'w'), stderr=subprocess.STDOUT))
+            if n == '1':
+                wait(lines, 'READY TO CRASH', 300)
+                proc.kill()  # a crash: nothing is saved
+                proc.wait(30)
+            else:
+                result = wait(lines, 'crash-rollback-dupe', 300).strip()
+        finally:
+            for b in bots:
+                b.kill()
+            if proc.poll() is None:
+                stop(proc)
+    (a.work / 'server-output.log').write_text(''.join(log))
+    print(result)
+    return 0 if 'PASS' in result else 1
 
 
 if __name__ == '__main__':

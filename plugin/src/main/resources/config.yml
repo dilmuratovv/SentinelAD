@@ -122,6 +122,25 @@ offline-check:
   on-gain: remove
   min-gain: 1
 
+network:
+  # Networks whose servers share player data (HuskSync and the like). Each server writes a leaving player's snapshot
+  # (watched stackables and seals) into a database all servers reach; the next server compares once the synced data
+  # is in place (on HuskSync's sync-complete event, otherwise after check-delay-ticks). Items that left the player
+  # after the save (the classic cross-server dupe) are taken back. Without this, the offline check turns itself off
+  # when a sync plugin is installed. Paper ships the MySQL and SQLite drivers.
+  enabled: false
+  # A unique name per server (default: the server folder name).
+  server-name: ""
+  # MySQL/MariaDB: "jdbc:mysql://host:3306/database"; servers on one machine can share "jdbc:sqlite:/path/shared.db".
+  jdbc-url: ""
+  username: ""
+  password: ""
+  # Without HuskSync's event: wait this long after the join for the data to arrive.
+  check-delay-ticks: 40
+  # Without HuskSync's event, join rewards may land in that time, so stackable gains are only flagged (60%) unless
+  # this is true. Sealed items that left the player are always taken back.
+  remove-after-delay: false
+
 item-commands:
   # Other plugins can create items or copies of sealed items through commands (/give, /kit, clone and item-editor
   # commands). A duplicate or stackable gain that follows such a command within window-seconds is only flagged

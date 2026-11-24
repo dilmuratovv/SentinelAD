@@ -32,6 +32,7 @@ public final class SentinelADPlugin extends JavaPlugin {
     private StackSessions stacks;
     private uz.sentinel.ad.ledger.ChunkAudit chunks;
     private uz.sentinel.ad.ledger.OfflineAudit offline;
+    private uz.sentinel.ad.ledger.CrashJournal journal;
 
     @Override
     public void onEnable() {
@@ -63,15 +64,21 @@ public final class SentinelADPlugin extends JavaPlugin {
         ledger.onForget(chunks::clear);
         ledger.onForget(offline::clear);
         stacks.audit(chunks);
+        journal = new uz.sentinel.ad.ledger.CrashJournal(this, stacks);
+        stacks.journal(journal);
+        offline.journal(journal);
+        ledger.onForget(journal::clear);
         stacks.applyConfig();
         ledger.start();
         chunks.start(ledger.lastShutdownClean());
+        journal.start(ledger.lastShutdownClean());
         offline.start(ledger.lastShutdownClean());
         getServer().getPluginManager().registerEvents(commands, this);
         getServer().getPluginManager().registerEvents(ledger, this);
         getServer().getPluginManager().registerEvents(stacks, this);
         getServer().getPluginManager().registerEvents(chunks, this);
         getServer().getPluginManager().registerEvents(offline, this);
+        getServer().getPluginManager().registerEvents(journal, this);
         // Old logs are otherwise only pruned at startup, which a long-running server never reaches.
         getServer().getScheduler().runTaskTimerAsynchronously(this, () -> {
             AuditLog log = auditLog;
@@ -97,6 +104,7 @@ public final class SentinelADPlugin extends JavaPlugin {
     public void onDisable() {
         if (chunks != null) chunks.stop();
         if (offline != null) offline.stop();
+        if (journal != null) journal.stop(); // after the stop snapshots: a clean shutdown leaves no journal
         if (ledger != null) ledger.stop();
         AuditLog log = auditLog;
         auditLog = null;
@@ -111,6 +119,7 @@ public final class SentinelADPlugin extends JavaPlugin {
         if (stacks != null) stacks.applyConfig();
         if (chunks != null) chunks.applyConfig();
         if (offline != null) offline.applyConfig();
+        if (journal != null) journal.applyConfig();
     }
 
     private void applyConfig() {

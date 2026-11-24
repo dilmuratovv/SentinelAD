@@ -51,6 +51,8 @@ Together: SentinelGuard adds the findings of SentinelAC, SentinelAD and Sentinel
 | **Safe removal** | A duplicate is re-checked after a short delay, only the new copy is removed, and it is backed up: `/sad restore <id>` gives it back. A copy picked up from another player's drop is taken from, and blamed on, the player who dropped it, so the receiver keeps it; a duplicated shulker box cannot be placed as a block, and a placed shulker keeps its seal. |
 | **Stackables** | While a container or a plugin backpack/vault is open, watched valuables (diamonds, netherite, totems...) in player + container must not grow; items created from nothing are taken back (backed up). |
 | **Chunk rollbacks** | Watched stackables are counted per chunk on unload and on load; a chunk that comes back with more (a chunk dupe) loses the surplus and the players who emptied it are flagged. |
+| **Crash dupes** | Every take of watched stackables is journaled at once; after a crash, items back in a chest or on the ground while the player kept them are removed. |
+| **Between servers** | With a shared MySQL/SQLite store, a player whose synced data is older than what the last server saw (HuskSync dupes) loses the surplus. |
 | **Disconnect dupes** | Inventory and ender chest are counted just after the server saved a leaving player, and again on join; a player who comes back with more loses the surplus and is flagged. |
 | **Event blocks** | Sealed copies, oversized stacks, breaking an open shulker, falling-block portals and storage entities going through portals. |
 | **Other plugins** | `/give`, `/kit`, `/item`, clone, item-editor and rollback commands never cause a removal — only a staff alert. A command must exist and be allowed for the player, so typing `/i` is no excuse. |
@@ -104,7 +106,7 @@ Everything is on by default. Staff with `sentinelad.alerts` (op) see alerts in c
 | `ledger.confirm-delay-ticks`, `click-debounce-ticks`, `scan-budget-ms` | Accuracy and cost. |
 | `ledger.exclude-materials` | Materials that are never sealed. |
 | `stackables.enabled`, `on-gain`, `min-gain`, `materials`, `storage-menus` | Stackable protection (`"*"` watches every stackable); titles of plugin backpacks/vaults checked like chests. |
-| `rollback-guard.*`, `offline-check.*` | Chunk rollback and disconnect dupe checks (`enabled`, `on-gain`, `min-gain`). |
+| `rollback-guard.*`, `offline-check.*`, `network.*` | Chunk rollback and disconnect dupe checks (`enabled`, `on-gain`, `min-gain`). |
 | `item-commands.enabled`, `window-seconds`, `player-trust-cooldown-minutes`, `commands` | Commands whose items are never removed. |
 | `protection.*` | Event blocks: `sealed-duplicates`, `open-shulker`, `falling-block-portals`, `oversized-stacks`, `storage-entity-portals`, `ignore-creative`. |
 | `escalation.*` | Optional console commands for repeat offenders (`threshold` serious findings within `window-minutes`). |
@@ -140,7 +142,7 @@ The JAR is compiled against the oldest supported API (Paper 1.21); every class a
 
 ### Good to know
 
-- Stackables are checked while a container or storage menu is open, per chunk across unload/load, and per player across quit/join. A chunk rollback caused by a server crash is not checked (the saved counts may be older than the chunks), and items from piston/TNT machines made possible by Paper's unsupported settings are not tracked. Paper fixes the classic piston/TNT/rail/carpet dupes; SentinelAD warns at startup when `config/paper-global.yml` switches them back on (`unsupported-settings`).
+- Stackables are checked while a container or storage menu is open, per chunk across unload/load, and per player across quit/join. Crash rollbacks are covered by the crash journal and dupes between servers by the network store; items from piston/TNT machines made possible by Paper's unsupported settings are not tracked. Paper fixes the classic piston/TNT/rail/carpet dupes; SentinelAD warns at startup when `config/paper-global.yml` switches them back on (`unsupported-settings`).
 - A copy in an offline player's inventory or an unloaded chunk is reported at 60% at once and checked again when it loads (1.3); the ledger is per server, so a copy carried to another server (HuskSync, a network) is not compared.
 - A plugin that hands out items **without a command** (a GUI shop, an API call) while a container is open can still trigger a stackable removal; use `stackables.on-gain: flag` there. The same goes for plugins that copy sealed items without a command: use `ledger.on-duplicate: flag`.
 - Do not restore `plugins/SentinelAD/` together with a world backup, or run `/sad ledger reset` after doing so; otherwise the rollback cannot be seen.

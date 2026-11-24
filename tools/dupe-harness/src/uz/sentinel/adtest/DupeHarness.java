@@ -131,7 +131,76 @@ public final class DupeHarness extends JavaPlugin implements Listener {
 
     // ------------------------------------------------------------------ scenarios
 
+    private String crashPhase() {
+        try {
+            java.nio.file.Path f = getDataFolder().toPath().resolve("crash-phase");
+            return Files.exists(f) ? Files.readString(f).trim() : "";
+        } catch (Exception e) { return ""; }
+    }
+
+    private Block crashChest(int dx, Material fill, int amount, boolean create) {
+        int cx = 30, cz = 30;
+        org.bukkit.Chunk ch = w.getChunkAt(cx, cz);
+        ch.addPluginChunkTicket(this);
+        Block b = w.getBlockAt((cx << 4) + 4 + dx, -60, (cz << 4) + 4);
+        if (create) {
+            b.setType(Material.CHEST);
+            ((Chest) b.getState(false)).getBlockInventory().addItem(new ItemStack(fill, amount));
+        }
+        return b;
+    }
+
+    /** Phase 1: take items, let Alice log out (saved), then the probe kills the server before the chunks save. */
+    private void crashSetup() {
+        w = a.getWorld();
+        a.getInventory().clear(); b.getInventory().clear();
+        Block c1 = crashChest(0, Material.DIAMOND, 64, true), c2 = crashChest(3, Material.GOLD_INGOT, 32, true);
+        Item drop = w.dropItem(a.getLocation().add(0, 0.5, 0), new ItemStack(Material.EMERALD, 16));
+        drop.setPickupDelay(60);
+        w.save(); // chests full and the emeralds on the ground are on disk
+        getLogger().info("CRASH saved world, emerald entity " + drop.getUniqueId());
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            Inventory i1 = ((Chest) c1.getState(false)).getBlockInventory();
+            a.openInventory(i1); i1.remove(Material.DIAMOND); a.getInventory().addItem(new ItemStack(Material.DIAMOND, 64)); a.closeInventory();
+            Inventory i2 = ((Chest) c2.getState(false)).getBlockInventory();
+            b.openInventory(i2); i2.remove(Material.GOLD_INGOT); b.getInventory().addItem(new ItemStack(Material.GOLD_INGOT, 32)); b.closeInventory();
+            getLogger().info("CRASH took: alice diamonds=" + diamonds(a.getInventory()) + " emeralds="
+                    + a.getInventory().all(Material.EMERALD).values().stream().mapToInt(ItemStack::getAmount).sum());
+            a.kick(net.kyori.adventure.text.Component.text("harness: log out before the crash"));
+            Bukkit.getScheduler().runTaskLater(this, () -> getLogger().info("READY TO CRASH"), 40);
+        }, 100); // the emeralds are picked up in the meantime
+    }
+
+    /** Phase 2, after the restart: the journal must have settled the rollback. */
+    private void crashCheck() {
+        w = a.getWorld();
+        Block c1 = crashChest(0, null, 0, false), c2 = crashChest(3, null, 0, false);
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            int chest = diamonds(((Chest) c1.getState(false)).getBlockInventory());
+            int alice = diamonds(a.getInventory());
+            int gold = ((Chest) c2.getState(false)).getBlockInventory().all(Material.GOLD_INGOT).values().stream().mapToInt(ItemStack::getAmount).sum();
+            int bobGold = b.getInventory().all(Material.GOLD_INGOT).values().stream().mapToInt(ItemStack::getAmount).sum();
+            int emeralds = a.getInventory().all(Material.EMERALD).values().stream().mapToInt(ItemStack::getAmount).sum();
+            int groundEmeralds = 0;
+            for (Item it : w.getEntitiesByClass(Item.class)) if (it.getItemStack().getType() == Material.EMERALD) groundEmeralds += it.getItemStack().getAmount();
+            boolean aliceFlag = false, bobFlag = false;
+            for (Finding f : ad.recent().latest(100)) {
+                if (f.detail().contains("crash dupe") && f.playerName().equals("Alice")) aliceFlag = true;
+                if (f.playerName().equals("Bob")) bobFlag = true;
+            }
+            String state = "chestDiamonds=" + chest + " aliceDiamonds=" + alice + " aliceEmeralds=" + emeralds + " groundEmeralds="
+                    + groundEmeralds + " chestGold=" + gold + " bobGold=" + bobGold + " aliceFlag=" + aliceFlag + " bobFlag=" + bobFlag;
+            boolean ok = chest + alice == 64 && emeralds + groundEmeralds == 16 && aliceFlag && !bobFlag && gold + bobGold == 32;
+            results.add((ok ? "PASS" : "FAIL") + " crash-rollback-dupe: " + state);
+            getLogger().info(results.get(results.size() - 1));
+            finish();
+        }, 160);
+    }
+
     private void begin() {
+        String phase = crashPhase();
+        if (phase.equals("1")) { crashSetup(); return; }
+        if (phase.equals("2")) { crashCheck(); return; }
         w = a.getWorld();
         a.getInventory().clear();
         b.getInventory().clear();
@@ -283,8 +352,9 @@ public final class DupeHarness extends JavaPlugin implements Listener {
             far[0].setType(Material.CHEST);
             ((Chest) far[0].getState(false)).getBlockInventory().addItem(new ItemStack(Material.DIAMOND, 64), new ItemStack(Material.EMERALD, 20));
             Bukkit.getScheduler().runTaskLater(this, () -> {
+                w.save(); // on disk with the chest full (1.21.1 does not save on unloadChunk(save=true) reliably)
                 ch.removePluginChunkTicket(this);
-                w.unloadChunk(cx, cz, true); // saved with the chest full
+                w.unloadChunk(cx, cz, true);
                 Bukkit.getScheduler().runTaskLater(this, () -> w.getChunkAt(cx, cz).addPluginChunkTicket(this), 40);
             }, 20);
         }, 140, () -> !flagged(null, 1) && diamonds(((Chest) far[0].getState(false)).getBlockInventory()) == 64 ? null : findings()));
@@ -305,6 +375,9 @@ public final class DupeHarness extends JavaPlugin implements Listener {
         }, 160, () -> {
             int inChest = diamonds(((Chest) far[0].getState(false)).getBlockInventory());
             int alice = diamonds(a.getInventory());
+            if (!flagged(null, 1) && inChest == 0 && alice == before[0] + 64) {
+                return "SKIP: this Paper saved the chunk anyway on unloadChunk(save=false), so no rollback happened (the SIGKILL crash test covers real rollbacks)";
+            }
             return flagged("Alice", 90) && inChest == 0 && alice == before[0] + 64 ? null
                     : "chest=" + inChest + " alice=" + alice + " (before " + before[0] + ") " + findings();
         }));
@@ -416,7 +489,8 @@ public final class DupeHarness extends JavaPlugin implements Listener {
         Bukkit.getScheduler().runTaskLater(this, () -> {
             String why;
             try { why = s.verify().get(); } catch (RuntimeException e) { why = "verify threw " + e; }
-            results.add((why == null ? "PASS " : "FAIL ") + s.name() + (why == null ? "" : ": " + why));
+            boolean skip = why != null && why.startsWith("SKIP");
+            results.add((why == null ? "PASS " : skip ? "SKIP " : "FAIL ") + s.name() + (why == null ? "" : ": " + (skip ? why.substring(6) : why)));
             getLogger().info(results.get(results.size() - 1));
             Bukkit.getScheduler().runTaskLater(this, () -> run(i + 1), 20);
         }, s.waitTicks());
@@ -427,7 +501,9 @@ public final class DupeHarness extends JavaPlugin implements Listener {
             Files.createDirectories(getDataFolder().toPath());
             Files.write(getDataFolder().toPath().resolve("results.txt"), results);
         } catch (Exception e) { getLogger().warning(e.toString()); }
-        getLogger().info("HARNESS DONE " + results.stream().filter(r -> r.startsWith("PASS")).count() + "/" + results.size());
+        getLogger().info("HARNESS DONE " + results.stream().filter(r -> r.startsWith("PASS")).count() + "/"
+                + results.stream().filter(r -> !r.startsWith("SKIP")).count()
+                + " (skipped " + results.stream().filter(r -> r.startsWith("SKIP")).count() + ")");
         getLogger().info("LEDGER " + ad.ledger().stats());
     }
 }
