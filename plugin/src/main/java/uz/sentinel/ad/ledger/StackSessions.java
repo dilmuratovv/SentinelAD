@@ -169,24 +169,30 @@ public final class StackSessions implements Listener {
                     "items appeared while a container was open, right after an item command (not removed): " + detail, false);
             return;
         }
+        int left = 0;
         if (remove) {
             for (var g : gains.entrySet()) {
-                String id = take(p, s.top, g.getKey(), g.getValue());
+                int[] untaken = new int[1];
+                String id = take(p, s.top, g.getKey(), g.getValue(), untaken);
+                left += untaken[0];
                 if (id != null) detail.append(" [restore id ").append(id).append(']');
             }
         }
+        String outcome = !remove ? "" : left == 0 ? " (removed)"
+                : " (" + left + " not removed: inside a bundle or shulker box, or already moved)";
         plugin.reporter().report(p.getUniqueId(), p.getName(), DupeType.STACK_GAIN, 90,
-                "items appeared from nothing while a container was open: " + detail + (remove ? " (removed)" : ""), false);
+                "items appeared from nothing while a container was open: " + detail + outcome, false);
     }
 
     /**
      * Takes the unexplained amount back, first from the player and then from the container that was open (hoppers and
      * redstone machines write there). Returns the restore id of the backed-up items, or null.
      */
-    private String take(Player p, Inventory top, Material m, int amount) {
+    private String take(Player p, Inventory top, Material m, int amount, int[] untaken) {
         int wanted = amount;
         amount -= takeFrom(p.getInventory(), m, amount);
         if (amount > 0) amount -= takeFrom(top, m, amount);
+        untaken[0] = amount;
         int taken = wanted - amount;
         if (taken <= 0 || plugin.ledger() == null) return null;
         return plugin.ledger().backup(new ItemStack(m, taken));

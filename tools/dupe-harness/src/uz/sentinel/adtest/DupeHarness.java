@@ -238,8 +238,26 @@ public final class DupeHarness extends JavaPlugin implements Listener {
         }, 160, () -> {
             boolean alice = flagged("Alice", 100), bob = flagged("Bob", 1);
             int copies = count(a.getInventory(), gold) + count(b.getInventory(), gold);
-            return alice && !bob && copies == 1 ? null : "alice=" + alice + " bob=" + bob + " copies=" + copies + " " + findings();
+            boolean bobKeeps = count(b.getInventory(), gold) == 1;
+            return alice && !bob && copies == 1 && bobKeeps ? null
+                    : "alice=" + alice + " bob=" + bob + " copies=" + copies + " bobKeeps=" + bobKeeps + " " + findings();
         }));
+
+        steps.add(new Step("plugin-anvil-menu-showing-item-is-not-a-dupe", () -> {
+            Inventory menu = Bukkit.createInventory(null, org.bukkit.event.inventory.InventoryType.ANVIL, net.kyori.adventure.text.Component.text("Rename"));
+            menu.setItem(0, a.getInventory().getItem(1).clone()); // a rename GUI shows the held item
+            a.openInventory(menu);
+        }, 120, () -> {
+            boolean clean = !flagged(null, 1);
+            a.closeInventory();
+            return clean && count(a.getInventory(), serial(keep[1])) == 1 ? null : findings();
+        }));
+
+        Allay[] unarmed = new Allay[1];
+        steps.add(new Step("mob-gear-is-not-sealed", () -> unarmed[0] = w.spawn(a.getLocation().add(-3, 1, 3), Allay.class, al -> {
+            al.setAI(false);
+            al.getEquipment().setItemInMainHand(new ItemStack(Material.BOW));
+        }), 80, () -> serial(unarmed[0].getEquipment().getItemInMainHand()) == null ? null : "the mob's bow got a seal"));
 
         String stone = serial(keep[7]);
         steps.add(new Step("legit-handover", () -> {

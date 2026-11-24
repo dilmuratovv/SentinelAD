@@ -94,6 +94,10 @@ public final class LedgerService implements Listener {
     private final Map<String, Long> unverifiedReported = new HashMap<>();
 
     private record Handover(UUID from, long at) {}
+    /** Block position "world:x:y:z" -> seal of the shulker box placed there (also read back on chunk load). */
+    private final Map<String, String> placedSeals = new HashMap<>();
+
+    private static String pos(org.bukkit.World w, int x, int y, int z) { return w.getUID() + ":" + x + ":" + y + ":" + z; }
     private static final long HANDOVER_MS = 30 * 60 * 1000L;
 
     private volatile boolean enabled;
@@ -186,11 +190,10 @@ public final class LedgerService implements Listener {
     private void saveAsync() {
         if (!dirty) return;
         dirty = false;
-        // Only references are copied on the main thread; the text is built in the background.
-        LedgerStore.Raw snapshot = store.raw();
+        // Nothing is copied on the main thread: the background task walks the (concurrent) ledger itself.
         Map<String, Long> times = worldTimes();
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-            try { LedgerStore.write(file, snapshot, false, times); }
+            try { LedgerStore.write(file, store.lines(), false, times); }
             catch (IOException e) { plugin.getLogger().log(Level.WARNING, "Could not save ledger.dat: " + e.getMessage()); }
         });
     }
@@ -243,6 +246,8 @@ public final class LedgerService implements Listener {
     private void enqueueChunk(Chunk chunk) {
         for (BlockState state : chunk.getTileEntities(false)) {
             if (Holders.storesItems(state)) enqueue(Holders.blockId(state.getBlock()));
+            String own = seal.read(state);
+            if (own != null) placedSeals.put(pos(state.getWorld(), state.getX(), state.getY(), state.getZ()), own);
         }
     }
 
@@ -359,7 +364,17 @@ public final class LedgerService implements Listener {
         Handover handed = handovers.get(serial);
         if (handed != null && System.currentTimeMillis() - handed.at() < HANDOVER_MS && actor != null
                 && !actor.getUniqueId().equals(handed.from()) && newId.equals(Holders.playerId(actor.getUniqueId()))) {
-            // The player picked this copy up from someone else's drop (a trade): blame the giver, not the receiver.
+            // The player picked this up from someone else's drop (a trade). The giver still has the other copy: take
+            // that one and blame the giver, so the receiver keeps what they traded for.
+            Player giver = Bukkit.getPlayer(handed.from());
+            if (giver != null && oldId.equals(Holders.playerId(giver.getUniqueId()))) {
+                Scan old = holders.resolve(oldId, false);
+                Sighting theirs = null;
+                if (old != null) for (Sighting s : old.sightings()) {
+                    if (s.serial().equals(serial) && (theirs == null || theirs.nested() && !s.nested())) theirs = s;
+                }
+                if (theirs != null) { actOn(serial, oldId, newId, theirs, giver, null); return; }
+            }
             actOn(serial, newId, oldId, target, null, handed.from());
             return;
         }
@@ -563,6 +578,38 @@ public final class LedgerService implements Listener {
     }
 
     /**
+     * The game does not carry an item's custom data onto a placed shulker box, so placing and breaking it would give
+     * it a new seal (and launder a copy). The seal is written onto the block and given back to the dropped item.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void placed(BlockPlaceEvent e) {
+        if (!enabled) return;
+        String serial = seal.read(e.getItemInHand());
+        if (serial == null || !Tag.SHULKER_BOXES.isTagged(e.getItemInHand().getType())) return;
+        Block b = e.getBlockPlaced();
+        String key = pos(b.getWorld(), b.getX(), b.getY(), b.getZ());
+        placedSeals.put(key, serial);
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!(b.getState(false) instanceof org.bukkit.block.TileState tile) || !Tag.SHULKER_BOXES.isTagged(b.getType())) return;
+            tile.getPersistentDataContainer().set(seal.key(), org.bukkit.persistence.PersistentDataType.STRING, serial);
+            enqueue(Holders.blockId(b));
+        });
+    }
+
+    /** A shulker box item dropping where a sealed one stood gets its seal back (broken by hand, explosion, piston). */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true) public void reseal(ItemSpawnEvent e) {
+        if (!enabled || placedSeals.isEmpty()) return;
+        ItemStack stack = e.getEntity().getItemStack();
+        if (!Tag.SHULKER_BOXES.isTagged(stack.getType()) || seal.read(stack) != null) return;
+        org.bukkit.Location l = e.getLocation();
+        String key = pos(l.getWorld(), l.getBlockX(), l.getBlockY(), l.getBlockZ());
+        String serial = placedSeals.get(key);
+        if (serial == null || Tag.SHULKER_BOXES.isTagged(l.getBlock().getType())) return;
+        placedSeals.remove(key);
+        seal.restore(stack, serial);
+        e.getEntity().setItemStack(stack);
+    }
+
+    /**
      * Placing a sealed block item (a shulker box) whose other copy still exists elsewhere is refused at once: a
      * duplicated shulker placed as a block would otherwise be emptied before the ledger removes the item.
      */
@@ -618,6 +665,7 @@ public final class LedgerService implements Listener {
         if (!enabled) return;
         for (BlockState state : e.getChunk().getTileEntities(false)) {
             if (Holders.storesItems(state)) process(holders.block(state.getBlock(), false));
+            placedSeals.remove(pos(state.getWorld(), state.getX(), state.getY(), state.getZ()));
         }
     }
 
@@ -625,7 +673,7 @@ public final class LedgerService implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) public void entitySpawn(EntitySpawnEvent e) {
         Entity en = e.getEntity();
         if (!enabled || !(en instanceof ArmorStand || en instanceof ItemFrame || (en instanceof InventoryHolder && !(en instanceof Player))
-                || en instanceof LivingEntity l && !(en instanceof Player) && Holders.holdsItems(l))) return;
+                || en instanceof LivingEntity l && !(en instanceof Player) && holders.holdsItems(l))) return;
         Bukkit.getScheduler().runTask(plugin, () -> { if (en.isValid()) enqueue(Holders.entityId(en.getUniqueId())); });
     }
 
@@ -646,7 +694,7 @@ public final class LedgerService implements Listener {
         for (Entity en : e.getEntities()) {
             if (en instanceof Item || en instanceof ItemFrame || en instanceof ArmorStand
                     || (en instanceof InventoryHolder && !(en instanceof Player))
-                    || (en instanceof LivingEntity l && !(en instanceof Player) && Holders.holdsItems(l))) enqueue(Holders.entityId(en.getUniqueId()));
+                    || (en instanceof LivingEntity l && !(en instanceof Player) && holders.holdsItems(l))) enqueue(Holders.entityId(en.getUniqueId()));
         }
     }
 }

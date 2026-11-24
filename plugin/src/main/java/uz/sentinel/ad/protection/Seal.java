@@ -15,6 +15,21 @@ public final class Seal {
         this.key = new NamespacedKey(plugin, "serial");
     }
 
+    public NamespacedKey key() { return key; }
+
+    /** The serial a placed block (shulker box) carries, or null. */
+    public String read(org.bukkit.block.BlockState state) {
+        if (!(state instanceof org.bukkit.block.TileState tile)) return null;
+        return tile.getPersistentDataContainer().get(key, PersistentDataType.STRING);
+    }
+
+    /** Puts a known serial on an item (a shulker box coming back from a placed block). */
+    public void restore(ItemStack item, String serial) {
+        ItemMeta meta = item.getItemMeta();
+        meta.getPersistentDataContainer().set(key, PersistentDataType.STRING, serial);
+        item.setItemMeta(meta);
+    }
+
     /** The serial of the item, or null when it has none. Cheap for ordinary stackable items. */
     public String read(ItemStack item) {
         // Only unstackable items can be sealed, so skip the (cloning) meta lookup for everything else.

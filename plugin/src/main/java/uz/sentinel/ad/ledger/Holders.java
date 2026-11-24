@@ -43,6 +43,8 @@ public final class Holders {
     static final int EQUIPMENT_BASE = 1000;
     /** Slot numbers of a player's transient work view (crafting grid, anvil, smithing...): 2000 + raw slot. */
     static final int VIEW_BASE = 2000;
+    /** The seal of the block itself (a placed shulker box): reported, never removed. */
+    static final int BLOCK_SELF = -2;
 
     private final ItemScanner scanner;
     private final Seal seal;
@@ -92,7 +94,7 @@ public final class Holders {
         // there must not be invisible. Result slots only preview an item (an anvil result carries the input's seal).
         InventoryView view = p.getOpenInventory();
         Inventory top = view.getTopInventory();
-        if (workView(top.getType())) {
+        if (workView(top.getType()) && ownView(top, p)) {
             for (int raw = 0; raw < top.getSize(); raw++) {
                 if (view.getSlotType(raw) == InventoryType.SlotType.RESULT) continue;
                 scanner.collect(top.getItem(raw), VIEW_BASE + raw, false, out, null);
@@ -108,6 +110,21 @@ public final class Holders {
                  MERCHANT -> true;
             default -> false;
         };
+    }
+
+    /**
+     * A real work view: the player's own crafting grid, a block in the world (crafting table, anvil...) or a villager.
+     * Plugin menus that only look like an anvil or a crafting table (rename and text-input GUIs) often show a copy of
+     * the player's item, which is not a duplicate.
+     */
+    static boolean ownView(Inventory top, Player p) {
+        try {
+            if (top.getLocation() != null) return true;
+            InventoryHolder h = top.getHolder(false);
+            return h == p || h instanceof org.bukkit.inventory.Merchant;
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     public Scan ender(Player p, boolean stamp) {
@@ -140,8 +157,12 @@ public final class Holders {
 
     public Scan block(Block b, boolean stamp) {
         List<Sighting> out = new ArrayList<>();
-        Inventory inv = containerInventory(b.getState(false));
+        BlockState state = b.getState(false);
+        Inventory inv = containerInventory(state);
         if (inv != null) scanner.scan(inv, stamp && stampContainers && stampable(inv), out);
+        // A placed shulker box keeps its item's seal on the block (see LedgerService#placed); it is part of this place.
+        String own = seal.read(state);
+        if (own != null) out.add(new Sighting(own, BLOCK_SELF, true));
         return new Scan(blockId(b), out);
     }
 
@@ -160,7 +181,10 @@ public final class Holders {
                 EntityEquipment eq = living.getEquipment();
                 for (EquipmentSlot slot : EQUIPMENT) {
                     ItemStack s = equipment(eq, slot);
-                    if (s != null) scanner.collect(s, EQUIPMENT_BASE + slot.ordinal(), stamp, out, () -> eq.setItem(slot, s));
+                    // Mob gear is never sealed (every skeleton's bow would fill the ledger); a copy put there is
+                    // already sealed, which is what matters. Armor stands are decoration players fill: sealed as before.
+                    boolean seal = stamp && e instanceof org.bukkit.entity.ArmorStand;
+                    if (s != null) scanner.collect(s, EQUIPMENT_BASE + slot.ordinal(), seal, out, () -> eq.setItem(slot, s));
                 }
             }
         }
@@ -172,12 +196,15 @@ public final class Holders {
     }
 
     /** True when a mob or stand wears or holds something worth tracking. */
-    public static boolean holdsItems(LivingEntity living) {
+    /** True when a mob or stand holds or wears a sealed item, or a shulker box or bundle that may contain one. */
+    public boolean holdsItems(LivingEntity living) {
+        if (living instanceof org.bukkit.entity.ArmorStand) return true;
         EntityEquipment eq = living.getEquipment();
         if (eq == null) return false;
         for (EquipmentSlot slot : EQUIPMENT) {
             ItemStack s = equipment(eq, slot);
-            if (s != null && !s.getType().isAir() && (s.getMaxStackSize() == 1 || ItemScanner.isContainerItem(s.getType()))) return true;
+            if (s == null || s.getType().isAir()) continue;
+            if (ItemScanner.isContainerItem(s.getType()) || seal.read(s) != null) return true;
         }
         return false;
     }
@@ -228,7 +255,7 @@ public final class Holders {
                     };
                     if (slot >= VIEW_BASE) {
                         Inventory top = pl.getOpenInventory().getTopInventory();
-                        return workView(top.getType()) ? inv(top, slot - VIEW_BASE) : null;
+                        return workView(top.getType()) && ownView(top, pl) ? inv(top, slot - VIEW_BASE) : null;
                     }
                     return inv(pl.getInventory(), slot);
                 }

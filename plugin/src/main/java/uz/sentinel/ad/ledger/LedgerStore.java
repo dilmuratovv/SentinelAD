@@ -15,20 +15,24 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Which holder each serial was last seen in. Main-thread only; {@link #snapshot()} produces an immutable copy for
- * background saving. A serial whose holder is {@code null} is "in transit" (taken out, not yet seen elsewhere).
+ * Which holder each serial was last seen in. Changed on the main thread only; {@link #lines()} may be read from the
+ * background save. A serial whose holder is {@code null} is "in transit" (taken out, not yet seen elsewhere).
  */
 public final class LedgerStore {
     /** The same serial was sighted in {@code holder} while the ledger already places it in {@code previous}. */
     public record Conflict(String serial, String previous, Sighting sighting) {}
 
     private static final class Entry {
-        String holder;
-        long seen;
+        volatile String holder;
+        volatile long seen;
         Entry(String holder, long seen) { this.holder = holder; this.seen = seen; }
     }
 
-    private final Map<String, Entry> entries = new HashMap<>();
+    /**
+     * Written on the main thread only; a concurrent map so that the background save can walk it without copying it
+     * on the main thread first (a copy of 500,000 entries cost a 30-50 ms tick on every save).
+     */
+    private final Map<String, Entry> entries = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Set<String>> byHolder = new HashMap<>();
     private final Map<String, Long> savedWorldTimes = new HashMap<>();
 
@@ -159,6 +163,16 @@ public final class LedgerStore {
 
     public List<String> snapshot() { return raw().lines(); }
 
+    /** The ledger as file lines; safe from any thread (weakly consistent while the main thread keeps writing). */
+    public List<String> lines() {
+        List<String> lines = new ArrayList<>(entries.size() + 16);
+        for (Map.Entry<String, Entry> e : entries.entrySet()) {
+            String holder = e.getValue().holder;
+            lines.add(e.getKey() + "\t" + (holder == null ? "-" : holder) + "\t" + e.getValue().seen);
+        }
+        return lines;
+    }
+
     public static void write(Path file, Raw snapshot, boolean clean, Map<String, Long> worldTimes) throws IOException {
         write(file, snapshot.lines(), clean, worldTimes);
     }
@@ -171,7 +185,8 @@ public final class LedgerStore {
      * {@code worldTimes}: world UUID -> world game time when the snapshot was taken. A world that later loads with an
      * older time was restored from a backup or rolled back, so the recorded item locations no longer hold.
      */
-    public static void write(Path file, List<String> snapshot, boolean clean, Map<String, Long> worldTimes) throws IOException {
+    // synchronized: a background save and the shutdown save must never write the same temporary file at once.
+    public static synchronized void write(Path file, List<String> snapshot, boolean clean, Map<String, Long> worldTimes) throws IOException {
         Files.createDirectories(file.toAbsolutePath().getParent());
         Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
         try (BufferedWriter w = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8)) {

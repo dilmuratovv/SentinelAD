@@ -10,11 +10,15 @@ SentinelAD 1.3.0: closes the bypasses and blind spots found in a review of 1.2. 
 - Copies held or worn by mobs (allay, zombie, fox, horse armor...).
 - Copies hidden in the crafting grid, anvil, smithing table and other work slots while the view is open.
 - A duplicated shulker box cannot be placed as a block (it could be emptied before the item was removed).
+- A placed shulker box keeps its seal: the game drops an item's custom data when the box is placed, so placing and breaking it gave it a new seal (and could launder a copy). The seal is now kept on the block and given back to the dropped item, whether the box is broken by hand, an explosion or a piston (found with a real client).
 - A copy whose other half is in an offline inventory or unloaded chunk is no longer silenced for 10 minutes: it is reported at 60% at once and confirmed and removed as soon as the other place loads.
 
 **Wrong-player fixes**
 - Taking diamonds out of a bundle while a chest is open was counted as items from nothing (removed, 90% flag). Bundle and shulker contents are now counted.
-- A copy picked up from another player's drop (a trade) is blamed on the player who dropped it, not on the receiver.
+- A copy picked up from another player's drop (a trade) is blamed on the player who dropped it, and the giver's copy is the one removed: the receiver keeps what they traded for.
+- Plugin menus that look like an anvil or crafting table (rename and text-input GUIs) and show a copy of the player's item are not counted as a duplicate.
+- Mob gear (every skeleton's bow, zombie weapons) is no longer sealed; a copy put on a mob is still found because it is already sealed.
+- A stackable gain inside a bundle or shulker box is reported as not removed instead of "(removed)".
 
 **Other**
 - Startup warning when `config/paper-global.yml` turns on a dupe or block-break exploit that Paper fixes (`unsupported-settings`), since stackables made that way are not tracked.
@@ -23,8 +27,10 @@ SentinelAD 1.3.0: closes the bypasses and blind spots found in a review of 1.2. 
 
 **Validation**
 - 36 unit tests (command permission/targeting, trust cooldown, Paper setting audit, ledger store).
-- Live test (`tools/dupe_probe.py` with the test-only `tools/dupe-harness` plugin): Paper 26.3 (build 230) + ViaVersion/ViaBackwards 5.12.2, two bot players on 26.1 protocol. The harness makes copies through the API (what a server bug amounts to) and legitimate moves; 17/17 as expected: trivial item not sealed; legit chest move clean; copies in a chest, crafting grid, allay hand and jukebox removed; fake `/i`, forbidden `/give` and a console `give Bob` did not excuse Alice; console `give Alice` re-sealed the copy at 60%; bundle unpack with a chest open clean; diamonds from nothing removed; handed-over copy blamed on the giver, receiver clean; legit handover clean; duplicated shulker placement refused; offline copy reported at 60% and removed after the player rejoined; Paper exploit-setting warning shown.
-- Limits of that test: the jukebox interaction and the shulker placement were simulated events, not real client clicks; the dupes are made by the harness, not by real exploits; ledger performance with a very large ledger was not re-measured.
+- Dupe simulator (`tools/dupe_probe.py` with the test-only `tools/dupe-harness` plugin): Paper 26.3 (build 230) + ViaVersion/ViaBackwards 5.12.2, two bot players. The harness makes copies through the API (what a server bug amounts to) and legitimate moves; 18/18 as expected plus the Paper setting warning: trivial item not sealed; legit chest move clean; copies in a chest, crafting grid, allay hand and jukebox removed; fake `/i`, forbidden `/give` and a console `give Bob` did not excuse Alice; console `give Alice` re-sealed the copy at 60%; bundle unpack with a chest open clean; diamonds from nothing removed; handed-over copy taken from the giver, receiver keeps it and is not flagged; legit handover clean; plugin anvil menu showing the item clean; mob bow not sealed; duplicated shulker placement refused; offline copy reported at 60% and removed after the player rejoined.
+- Real client (`tools/ad_realclient.py`): Minecraft 1.21.11 with Meteor Client (no module on) in a virtual display, real mouse and keyboard, on the same server: shift-clicking a sealed sword and diamonds into and out of a chest, unpacking a bundle into an open chest, an ender chest round trip, the 2x2 crafting grid, placing / filling / breaking a sealed shulker box, dropping and picking up: 6/6 without a finding and with every seal kept. The first run found that a placed shulker lost its seal; fixed and rerun.
+- Load: a ledger of 500,000 sealed items, saves every 10 s, two players. Before the fix every save cost a 30–50 ms tick; after it the tick profile matches the same server without SentinelAD (median tick ~2 ms; occasional spikes of 35–60 ms in both runs). The 500,000-entry `ledger.dat` is 49 MB.
+- Not covered: real exploits (the copies are made by the harness), Paper 1.21.x (only 26.3 was run for 1.3.0), jukebox insertion and shulker placement of a copy were simulated events.
 
 **Upgrade:** replace the JAR and restart. Existing `config.yml` keeps working; new keys use the bundled defaults. Add `co`, `rollback` and similar to your own `item-commands.commands` list if you set one.
 
