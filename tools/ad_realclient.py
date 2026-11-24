@@ -196,6 +196,36 @@ def main():
         client.hold('w', True); time.sleep(0.9); client.hold('w', False)
         server.pump(seconds=4)
         check('drop-and-pickup', n, len(serials(inventory_nbt())) >= len(sealed) - 1)
+
+        # 7. real chunk unload/load: a chest with diamonds, the player travels 2000 blocks away and back
+        n = len(findings())
+        server.cmd('setblock 6 -60 6 chest')
+        server.cmd('item replace block 6 -60 6 container.0 with diamond 40')
+        server.pump(seconds=12)  # past the console-command window
+        server.cmd(f'tp {player} 2000.5 -60 2000.5'); server.pump(seconds=20)
+        server.cmd(f'tp {player} 0.5 -60 0.5 0 35'); server.pump(seconds=15)
+        server.cmd('data get block 6 -60 6 Items')
+        far = server.pump('block data', 10) or ''
+        check('travel-unload-reload', n, 'diamond' in far, note=far.strip()[-120:])
+
+        # 8. abrupt disconnect with diamonds in the crafting grid and on the cursor, then rejoin
+        n = len(findings())
+        server.cmd(f'give {player} diamond 20'); server.pump(seconds=12)
+        before_text = inventory_nbt()
+        client.tap('e'); time.sleep(1.0)
+        click_at(inv_slot(0, 0)); click_at(craft_grid(1), button=3)  # stack on cursor, one into the grid
+        time.sleep(0.5)
+        client.stop()                                                 # the game process dies: no clean quit
+        server.pump(player + ' left the game', 60)
+        server.pump(seconds=3)
+        client.launch()
+        server.pump(player + ' joined the game', 300)
+        server.pump(seconds=12)
+        client.center()
+        after_text = inventory_nbt()
+        count = lambda t: sum(int(x) for x in re.findall(r'id: "minecraft:diamond", count: (\d+)', t))
+        check('disconnect-with-grid-and-cursor', n, count(after_text) == count(before_text),
+              note=f'diamonds before={count(before_text)} after={count(after_text)}')
     finally:
         client.close()
         server.cmd('stop')

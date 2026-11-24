@@ -30,6 +30,8 @@ public final class SentinelADPlugin extends JavaPlugin {
     private Seal seal;
     private LedgerService ledger;
     private StackSessions stacks;
+    private uz.sentinel.ad.ledger.ChunkAudit chunks;
+    private uz.sentinel.ad.ledger.OfflineAudit offline;
 
     @Override
     public void onEnable() {
@@ -49,13 +51,27 @@ public final class SentinelADPlugin extends JavaPlugin {
         seal = new Seal(this);
         getServer().getPluginManager().registerEvents(new TransferProtection(this, seal), this);
         CommandActivity commands = new CommandActivity();
+        commands.offlineResolver(name -> {
+            var op = Bukkit.getOfflinePlayerIfCached(name);
+            return op == null ? null : op.getUniqueId();
+        });
         ledger = new LedgerService(this, seal, commands);
         stacks = new StackSessions(this, ledger.holders(), commands);
-        ledger.start();
+        // Chunk and offline checks must see the forget hook before the ledger may fire it (world rollback on start).
+        chunks = new uz.sentinel.ad.ledger.ChunkAudit(this, stacks, commands);
+        offline = new uz.sentinel.ad.ledger.OfflineAudit(this, stacks, commands);
+        ledger.onForget(chunks::clear);
+        ledger.onForget(offline::clear);
+        stacks.audit(chunks);
         stacks.applyConfig();
+        ledger.start();
+        chunks.start(ledger.lastShutdownClean());
+        offline.start(ledger.lastShutdownClean());
         getServer().getPluginManager().registerEvents(commands, this);
         getServer().getPluginManager().registerEvents(ledger, this);
         getServer().getPluginManager().registerEvents(stacks, this);
+        getServer().getPluginManager().registerEvents(chunks, this);
+        getServer().getPluginManager().registerEvents(offline, this);
         // Old logs are otherwise only pruned at startup, which a long-running server never reaches.
         getServer().getScheduler().runTaskTimerAsynchronously(this, () -> {
             AuditLog log = auditLog;
@@ -79,6 +95,8 @@ public final class SentinelADPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (chunks != null) chunks.stop();
+        if (offline != null) offline.stop();
         if (ledger != null) ledger.stop();
         AuditLog log = auditLog;
         auditLog = null;
@@ -91,6 +109,8 @@ public final class SentinelADPlugin extends JavaPlugin {
         applyConfig();
         if (ledger != null) ledger.applyConfig();
         if (stacks != null) stacks.applyConfig();
+        if (chunks != null) chunks.applyConfig();
+        if (offline != null) offline.applyConfig();
     }
 
     private void applyConfig() {
@@ -129,6 +149,7 @@ public final class SentinelADPlugin extends JavaPlugin {
     public DupeReporter reporter() { return reporter; }
     public Seal seal() { return seal; }
     public LedgerService ledger() { return ledger; }
+    public uz.sentinel.ad.ledger.ChunkAudit chunks() { return chunks; }
     public long droppedLogLines() { AuditLog log = auditLog; return log == null ? 0 : log.dropped(); }
     public String prefix() { return prefix; }
 }

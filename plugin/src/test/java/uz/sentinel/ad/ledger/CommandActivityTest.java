@@ -130,4 +130,18 @@ class CommandActivityTest {
         assertNull(CommandActivity.targets("kit", online::get));
         assertEquals(java.util.Set.of(a), CommandActivity.targets("give Alice diamond 64", online::get));
     }
+
+    @Test
+    void offlineEditsAreRememberedPerPlayer() {
+        CommandActivity c = new CommandActivity();
+        UUID away = UUID.randomUUID();
+        c.offlineResolver(name -> name.equals("Away") ? away : null);
+        c.recordConsole("openinv Away", 5_000, online::get);
+        assertTrue(c.namedSince(away, 1_000, 900_000), "an admin edited Away's inventory while offline");
+        assertFalse(c.namedSince(a, 1_000, 900_000));
+        assertFalse(c.explains(a, 5_500), "a command for an offline player does not excuse players online");
+        assertFalse(c.namedSince(away, 6_000, 900_000), "older than the quit");
+        c.recordConsole("co rollback t:1h", 7_000, online::get);
+        assertTrue(c.namedSince(a, 6_000, 900_000), "a global rollback can touch everyone");
+    }
 }

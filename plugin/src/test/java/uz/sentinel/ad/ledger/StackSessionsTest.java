@@ -29,4 +29,15 @@ class StackSessionsTest {
         assertFalse(StackSessions.allowed(InventoryType.WORKBENCH, true));
         assertFalse(StackSessions.allowed(InventoryType.MERCHANT, false));
     }
+
+    @org.junit.jupiter.api.Test
+    void storageMenuTitles() {
+        java.util.List<String> p = java.util.List.of("backpack*", "*backpack", "vault #*");
+        org.junit.jupiter.api.Assertions.assertTrue(StackSessions.titleMatches("Backpack (Large)", p));
+        org.junit.jupiter.api.Assertions.assertTrue(StackSessions.titleMatches("Steve's Backpack", p));
+        org.junit.jupiter.api.Assertions.assertTrue(StackSessions.titleMatches("Vault #3", p));
+        org.junit.jupiter.api.Assertions.assertFalse(StackSessions.titleMatches("Shop", p));
+        org.junit.jupiter.api.Assertions.assertFalse(StackSessions.titleMatches("Vault", p));
+        org.junit.jupiter.api.Assertions.assertFalse(StackSessions.titleMatches("Buy (x.y) backpacks here", java.util.List.of("backpack")));
+    }
 }

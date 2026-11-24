@@ -69,6 +69,10 @@ stackables:
   on-gain: remove
   # Smallest unexplained gain that is reported.
   min-gain: 1
+  # Plugin menus that STORE items (backpacks, player vaults): checked like a chest, by title ("*" = any text, case
+  # ignored). Never list shops, auction houses or crates here: they hand out items by design.
+  storage-menus: ["Backpack", "Backpack #*", "Backpack (*)", "*'s Backpack", "Vault #*", "Player Vault #*", "Rucksack",
+                  "Personal Vault"]
   # Use "*" in the list to watch every stackable item.
   materials:
     - DIAMOND
@@ -101,6 +105,22 @@ stackables:
     - GLOWSTONE
     - REDSTONE_BLOCK
     - LAPIS_BLOCK
+
+rollback-guard:
+  # Chunk rollback dupes: a chunk that was not saved after a player took items out comes back with them. The watched
+  # stackables in each chunk are counted when it unloads and again when it loads; more than before is taken out of
+  # the chunk (backed up, /sad restore) and the players who took items from that chunk are flagged.
+  enabled: true
+  on-gain: remove
+  min-gain: 1
+
+offline-check:
+  # Disconnect dupes: watched stackables in inventory + ender chest are counted on quit and again on join (before
+  # other plugins' join rewards). More than before is taken back and flagged. Admin/console item commands naming the
+  # player while offline excuse it. Turned off automatically with HuskSync and other cross-server data sync plugins.
+  enabled: true
+  on-gain: remove
+  min-gain: 1
 
 item-commands:
   # Other plugins can create items or copies of sealed items through commands (/give, /kit, clone and item-editor

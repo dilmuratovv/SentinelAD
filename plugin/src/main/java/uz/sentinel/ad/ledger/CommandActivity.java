@@ -51,6 +51,8 @@ public final class CommandActivity implements Listener {
     private final Map<UUID, Long> trustedCommand = new HashMap<>();
     private final Map<UUID, Long> lastExplained = new HashMap<>();
     private long globalCommand = Long.MIN_VALUE;
+    /** Last time a trusted (console/staff) item command named each player; kept for weeks (offline edits). */
+    private final Map<UUID, Long> namedAt = new HashMap<>();
     private Set<String> commands = new HashSet<>(DEFAULT_COMMANDS);
     private long windowMillis = 10_000;
     private long trustCooldownMillis = 10 * 60_000L;
@@ -119,13 +121,47 @@ public final class CommandActivity implements Listener {
         }
         Set<UUID> named = targets(commandLine, online);
         trustedCommand.put(player, now);
+        if (named == null && !(commandLine.contains("@") || looksGlobal(commandLine))) {
+            UUID[] byName = offlineTargets(commandLine);
+            for (UUID id : byName) namedAt.put(id, now);
+        }
         if (named == null) {
             // Staff running a command for themselves ("/kit", "/i diamond_sword") only explains their own inventory.
             // A selector or a rollback tool affects others without naming them.
             if (commandLine.contains("@") || looksGlobal(commandLine)) globalCommand = now;
             return;
         }
-        for (UUID id : named) trustedCommand.put(id, now);
+        for (UUID id : named) { trustedCommand.put(id, now); namedAt.put(id, now); }
+    }
+
+    /** Offline players named by a command (an admin editing an offline inventory); resolved lazily, may be empty. */
+    private UUID[] offlineTargets(String commandLine) {
+        if (offlineResolver == null) return new UUID[0];
+        List<UUID> out = new java.util.ArrayList<>();
+        String[] words = strip(commandLine).split("\\s+");
+        for (int i = 1; i < words.length; i++) {
+            String w = words[i];
+            if (w.length() < 3 || w.length() > 16 || !w.matches("[A-Za-z0-9_]+")) continue;
+            UUID id = offlineResolver.apply(w);
+            if (id != null) out.add(id);
+        }
+        return out.toArray(new UUID[0]);
+    }
+
+    private Function<String, UUID> offlineResolver;
+
+    /** Name -> UUID of players who have played here (cached by the server); null in tests. */
+    public void offlineResolver(Function<String, UUID> resolver) { this.offlineResolver = resolver; }
+
+    /**
+     * True when a trusted item command named this player, or affected everyone, after {@code since}: admin tools
+     * (OpenInv, rollbacks) edit offline inventories that way.
+     */
+    public boolean namedSince(UUID player, long since, long now) {
+        if (!enabled) return false;
+        if (globalCommand != Long.MIN_VALUE && globalCommand >= since) return true;
+        Long t = namedAt.get(player);
+        return t != null && t >= since;
     }
 
     /** Rollback and restore tools act on the world or on other players without naming an online player. */
@@ -143,8 +179,14 @@ public final class CommandActivity implements Listener {
     public void recordConsole(String commandLine, long now, Function<String, UUID> online) {
         if (!enabled || !isItemCommand(commandLine)) return;
         Set<UUID> named = targets(commandLine, online);
-        if (named == null) { globalCommand = now; return; }
-        for (UUID id : named) trustedCommand.put(id, now);
+        if (named == null) {
+            UUID[] byName = offlineTargets(commandLine);
+            // A command for an offline player ("give Bob ..." while Bob is away) explains nothing about players online.
+            if (byName.length > 0 && !commandLine.contains("@")) { for (UUID id : byName) namedAt.put(id, now); return; }
+            globalCommand = now;
+            return;
+        }
+        for (UUID id : named) { trustedCommand.put(id, now); namedAt.put(id, now); }
     }
 
     /** Why a finding may be explained: not at all, by the player's own command, or by a trusted one (console, staff). */
@@ -209,5 +251,6 @@ public final class CommandActivity implements Listener {
         playerCommand.values().removeIf(t -> now - t > windowMillis);
         trustedCommand.values().removeIf(t -> now - t > windowMillis);
         lastExplained.values().removeIf(t -> now - t > trustCooldownMillis);
+        namedAt.values().removeIf(t -> now - t > 60L * 86_400_000L);
     }
 }

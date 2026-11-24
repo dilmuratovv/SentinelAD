@@ -101,6 +101,14 @@ public final class LedgerService implements Listener {
     private static final long HANDOVER_MS = 30 * 60 * 1000L;
 
     private volatile boolean enabled;
+    private boolean lastClean = true;
+    private final List<Runnable> onForget = new java.util.ArrayList<>();
+
+    /** Whether ledger.dat was written by a clean shutdown (read in {@link #start()}). */
+    public boolean lastShutdownClean() { return lastClean; }
+
+    /** Runs when item locations are forgotten (world rollback, /sad ledger reset). */
+    public void onForget(Runnable r) { onForget.add(r); }
     private boolean dirty;
     private long scans, conflicts, removedCount, restamped;
     private int removedSeq;
@@ -120,7 +128,8 @@ public final class LedgerService implements Listener {
     public void start() {
         applyConfig();
         try {
-            if (!store.load(file)) plugin.getLogger().warning("Ledger was not closed cleanly last time; item locations are rebuilt from scratch.");
+            lastClean = store.load(file);
+            if (!lastClean) plugin.getLogger().warning("Ledger was not closed cleanly last time; item locations are rebuilt from scratch.");
             plugin.getLogger().info("Ledger loaded: " + store.size() + " sealed items.");
         } catch (IOException e) {
             plugin.getLogger().log(Level.WARNING, "Could not read ledger.dat: " + e.getMessage());
@@ -180,6 +189,7 @@ public final class LedgerService implements Listener {
             plugin.getLogger().warning("World " + world.getName() + " is older than the ledger (time " + world.getGameTime()
                     + " < " + recorded + "): it was restored or rolled back. Item locations are rebuilt from scratch.");
             store.forgetHolders();
+            onForget.forEach(Runnable::run);
             dirty = true;
         }
         recordedTimes.put(id, world.getGameTime());
@@ -501,6 +511,7 @@ public final class LedgerService implements Listener {
         delayed.clear();
         pending.clear();
         suppressed.clear();
+        onForget.forEach(Runnable::run);
         dirty = true;
         for (Player p : Bukkit.getOnlinePlayers()) { enqueuePlayer(p); enqueueEnder(p); }
     }

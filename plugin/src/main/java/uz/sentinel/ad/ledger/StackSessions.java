@@ -4,6 +4,7 @@ import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -40,6 +41,7 @@ public final class StackSessions implements Listener {
         final Set<String> area;
         final EnumMap<Material, Integer> before;
         final EnumMap<Material, Integer> flow = new EnumMap<>(Material.class);
+        java.util.Map<String, Integer> topBefore = java.util.Map.of();
         final long opened = System.currentTimeMillis();
         boolean tainted;
         Session(UUID player, Inventory top, Set<String> area, EnumMap<Material, Integer> before) {
@@ -51,9 +53,20 @@ public final class StackSessions implements Listener {
     private final Holders holders;
     private final CommandActivity commands;
     private final Map<UUID, Session> sessions = new HashMap<>();
+    private volatile ChunkAudit audit;
+
+    public void audit(ChunkAudit audit) { this.audit = audit; }
+
+    private java.util.Map<String, Integer> topCount(Inventory top) {
+        java.util.Map<String, Integer> m = new java.util.TreeMap<>();
+        countInto(m, top.getContents());
+        return m;
+    }
     private volatile boolean enabled;
     private volatile Set<Material> watched = EnumSet.noneOf(Material.class);
     private volatile boolean watchAll;
+    /** Lower-case title patterns ("*" wildcard) of plugin menus that store items (backpacks, vaults). */
+    private volatile List<String> storageMenus = List.of();
 
     public StackSessions(SentinelADPlugin plugin, Holders holders, CommandActivity commands) {
         this.plugin = plugin;
@@ -72,9 +85,14 @@ public final class StackSessions implements Listener {
         }
         watched = set;
         watchAll = all;
+        List<String> menus = new java.util.ArrayList<>();
+        for (String t : plugin.getConfig().getStringList("stackables.storage-menus")) {
+            if (!t.isBlank()) menus.add(t.trim().toLowerCase(Locale.ROOT));
+        }
+        storageMenus = menus;
     }
 
-    private boolean watching(Material m) {
+    public boolean watching(Material m) {
         return watched.contains(m) || (watchAll && !m.isAir() && m.isItem() && m.getMaxStackSize() > 1);
     }
 
@@ -83,6 +101,16 @@ public final class StackSessions implements Listener {
      * Plugin menus (shops, auction houses, crates, kit menus) are also CHEST inventories, but they hand out items
      * by design, so counting them would take legitimately bought or claimed items away.
      */
+    /** Glob match with "*" (any text); case is already lowered. */
+    static boolean titleMatches(String title, List<String> patterns) {
+        String t = title.toLowerCase(Locale.ROOT).trim();
+        for (String p : patterns) {
+            String regex = java.util.regex.Pattern.quote(p).replace("*", "\\E.*\\Q");
+            if (t.matches(regex)) return true;
+        }
+        return false;
+    }
+
     static boolean allowed(InventoryType type, boolean inWorld) {
         return switch (type) {
             case ENDER_CHEST -> true;
@@ -104,6 +132,13 @@ public final class StackSessions implements Listener {
     }
 
     private void add(EnumMap<Material, Integer> totals, ItemStack[] items) { add(totals, items, 0); }
+
+    /** Adds the watched items (also inside bundles and shulker boxes) to {@code totals}, keyed by material name. */
+    public void countInto(java.util.Map<String, Integer> totals, ItemStack[] items) {
+        EnumMap<Material, Integer> m = new EnumMap<>(Material.class);
+        add(m, items, 0);
+        m.forEach((k, v) -> totals.merge(k.name(), v, Integer::sum));
+    }
 
     /**
      * Counts watched items, including those inside bundles and shulker boxes: taking diamonds out of a bundle while a
@@ -130,14 +165,24 @@ public final class StackSessions implements Listener {
     public void open(InventoryOpenEvent e) {
         if (!enabled || !(e.getPlayer() instanceof Player p)) return;
         Inventory top = e.getInventory();
-        if (!allowed(top.getType(), inWorld(top)) ||p.getGameMode() == GameMode.CREATIVE || p.hasPermission(TransferProtection.BYPASS)) return;
+        boolean storageMenu = false;
+        if (!allowed(top.getType(), inWorld(top)) && !inWorld(top) && !storageMenus.isEmpty()) {
+            // A plugin storage menu (backpack, vault): items only move between it and the player, like a chest.
+            String title = net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText().serialize(e.getView().title());
+            storageMenu = titleMatches(title, storageMenus);
+        }
+        if ((!allowed(top.getType(), inWorld(top)) && !storageMenu) || p.getGameMode() == GameMode.CREATIVE
+                || p.hasPermission(TransferProtection.BYPASS)) return;
         Set<String> area = areaOf(top, p);
         // Someone else already in the same container makes the arithmetic meaningless for both.
         for (Session s : sessions.values()) {
             for (String id : area) if (s.area.contains(id)) { s.tainted = true; }
         }
         Session s = new Session(p.getUniqueId(), top, area, count(p, top));
-        for (Session other : sessions.values()) if (!java.util.Collections.disjoint(other.area, area)) s.tainted = true;
+        s.topBefore = topCount(top);
+        for (Session other : sessions.values()) {
+            if (!java.util.Collections.disjoint(other.area, area) || other.top == top) { s.tainted = true; other.tainted = true; }
+        }
         sessions.put(p.getUniqueId(), s);
     }
 
@@ -145,7 +190,13 @@ public final class StackSessions implements Listener {
     public void close(InventoryCloseEvent e) {
         if (!(e.getPlayer() instanceof Player p)) return;
         Session s = sessions.remove(p.getUniqueId());
-        if (s == null || s.tainted || !enabled) return;
+        if (s == null || !enabled) return;
+        // A container in the world that lost watched items to this player: remember who emptied that chunk.
+        ChunkAudit a = audit;
+        if (a != null && s.top.getLocation() != null && !Amounts.gains(topCount(s.top), s.topBefore, 1).isEmpty()) {
+            a.took(s.top.getLocation().getChunk(), p.getUniqueId());
+        }
+        if (s.tainted) return;
         EnumMap<Material, Integer> after = count(p, s.top);
         int min = Math.max(1, plugin.getConfig().getInt("stackables.min-gain", 1));
         StringBuilder detail = new StringBuilder();

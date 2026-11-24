@@ -46,6 +46,30 @@ public final class DupeHarness extends JavaPlugin implements Listener {
     private int findingsBefore;
     private boolean started;
     private final ItemStack[] keep = new ItemStack[8];
+    private boolean addOnQuit;
+    private Inventory returnOnQuit;
+
+    /** Runs after SentinelAD's quit handler (same priority, registered later): the saved inventory differs. */
+    @EventHandler(priority = org.bukkit.event.EventPriority.MONITOR)
+    public void quit(org.bukkit.event.player.PlayerQuitEvent e) {
+        if (returnOnQuit != null && e.getPlayer().getName().equals("Alice")) {
+            // Like a plugin GUI that gives its input back when the viewer leaves.
+            for (ItemStack it : returnOnQuit.getContents()) if (it != null) e.getPlayer().getInventory().addItem(it);
+            returnOnQuit.clear();
+            returnOnQuit = null;
+        }
+        if (addOnQuit && e.getPlayer().getName().equals("Alice")) {
+            // The disconnect dupe: the inventory is already saved with 32 diamonds, then they leave the player and
+            // land on the ground. After the rejoin they exist twice.
+            addOnQuit = false;
+            Player gone = e.getPlayer();
+            Location at = gone.getLocation();
+            Bukkit.getScheduler().runTaskLater(this, () -> {
+                gone.getInventory().removeItem(new ItemStack(Material.DIAMOND, 32));
+                at.getWorld().dropItem(at.clone().add(0, 0, 4), new ItemStack(Material.DIAMOND, 32));
+            }, 3L);
+        }
+    }
 
     @Override public void onEnable() {
         ad = (SentinelADPlugin) Bukkit.getPluginManager().getPlugin("SentinelAD");
@@ -229,6 +253,89 @@ public final class DupeHarness extends JavaPlugin implements Listener {
             a.closeInventory();
         }, 60, () -> flagged("Alice", 90) && diamonds(c3) + diamonds(a.getInventory()) == 10 ? null
                 : "total=" + (diamonds(c3) + diamonds(a.getInventory())) + " " + findings()));
+
+        Inventory backpack = Bukkit.createInventory(null, 27, net.kyori.adventure.text.Component.text("Backpack"));
+        int[] before = new int[1];
+        steps.add(new Step("backpack-menu-dupe-is-removed", () -> {
+            backpack.addItem(new ItemStack(Material.DIAMOND, 10));
+            before[0] = diamonds(a.getInventory());
+            a.openInventory(backpack);
+            a.getInventory().addItem(new ItemStack(Material.DIAMOND, 10)); // took them out, the menu kept them
+            a.closeInventory();
+        }, 60, () -> flagged("Alice", 90) && diamonds(a.getInventory()) == before[0] ? null
+                : "diamonds=" + diamonds(a.getInventory()) + " before=" + before[0] + " " + findings()));
+
+        Inventory shop = Bukkit.createInventory(null, 27, net.kyori.adventure.text.Component.text("Backpack Shop"));
+        steps.add(new Step("shop-menu-purchase-is-legit", () -> {
+            shop.setItem(13, new ItemStack(Material.DIAMOND, 5));
+            before[0] = diamonds(a.getInventory());
+            a.openInventory(shop);
+            a.getInventory().addItem(new ItemStack(Material.DIAMOND, 5)); // bought
+            a.closeInventory();
+        }, 60, () -> !flagged(null, 1) && diamonds(a.getInventory()) == before[0] + 5 ? null : findings()));
+
+        int cx = 20, cz = 20; // 320 blocks away from the players: only loaded when the harness asks
+        Block[] far = new Block[1];
+        steps.add(new Step("chunk-reload-without-rollback-is-clean", () -> {
+            org.bukkit.Chunk ch = w.getChunkAt(cx, cz);
+            ch.addPluginChunkTicket(this);
+            far[0] = w.getBlockAt((cx << 4) + 8, -60, (cz << 4) + 8);
+            far[0].setType(Material.CHEST);
+            ((Chest) far[0].getState(false)).getBlockInventory().addItem(new ItemStack(Material.DIAMOND, 64), new ItemStack(Material.EMERALD, 20));
+            Bukkit.getScheduler().runTaskLater(this, () -> {
+                ch.removePluginChunkTicket(this);
+                w.unloadChunk(cx, cz, true); // saved with the chest full
+                Bukkit.getScheduler().runTaskLater(this, () -> w.getChunkAt(cx, cz).addPluginChunkTicket(this), 40);
+            }, 20);
+        }, 140, () -> !flagged(null, 1) && diamonds(((Chest) far[0].getState(false)).getBlockInventory()) == 64 ? null : findings()));
+
+        steps.add(new Step("chunk-rollback-dupe-is-removed", () -> {
+            Inventory chestInv = ((Chest) far[0].getState(false)).getBlockInventory();
+            before[0] = diamonds(a.getInventory());
+            a.openInventory(chestInv);
+            chestInv.remove(Material.DIAMOND);
+            a.getInventory().addItem(new ItemStack(Material.DIAMOND, 64)); // Alice takes all 64
+            a.closeInventory();
+            Bukkit.getScheduler().runTaskLater(this, () -> {
+                w.getChunkAt(cx, cz).removePluginChunkTicket(this);
+                boolean unloaded = w.unloadChunk(cx, cz, false); // NOT saved: the disk still has the full chest
+                getLogger().info("rollback unload=" + unloaded);
+                Bukkit.getScheduler().runTaskLater(this, () -> w.getChunkAt(cx, cz).addPluginChunkTicket(this), 40);
+            }, 20);
+        }, 160, () -> {
+            int inChest = diamonds(((Chest) far[0].getState(false)).getBlockInventory());
+            int alice = diamonds(a.getInventory());
+            return flagged("Alice", 90) && inChest == 0 && alice == before[0] + 64 ? null
+                    : "chest=" + inChest + " alice=" + alice + " (before " + before[0] + ") " + findings();
+        }));
+
+        steps.add(new Step("plugin-menu-returning-items-on-quit-is-legit", () -> {
+            Inventory anvil = Bukkit.createInventory(null, org.bukkit.event.inventory.InventoryType.ANVIL, net.kyori.adventure.text.Component.text("Repair"));
+            anvil.setItem(0, new ItemStack(Material.DIAMOND, 7));
+            before[0] = diamonds(a.getInventory()) + 7;
+            a.openInventory(anvil);
+            returnOnQuit = anvil;
+            a.kick(net.kyori.adventure.text.Component.text("harness: quit with a plugin menu open"));
+        }, 300, () -> {
+            Player back = Bukkit.getPlayerExact("Alice");
+            if (back == null) return "Alice did not come back " + findings();
+            a = back;
+            return !flagged(null, 1) && diamonds(a.getInventory()) == before[0] ? null
+                    : "diamonds=" + diamonds(a.getInventory()) + " expected=" + before[0] + " " + findings();
+        }));
+
+        steps.add(new Step("disconnect-dupe-is-removed", () -> {
+            a.getInventory().addItem(new ItemStack(Material.DIAMOND, 32));
+            before[0] = diamonds(a.getInventory()) - 32; // after the rejoin only the copy on the ground may remain
+            addOnQuit = true;
+            a.kick(net.kyori.adventure.text.Component.text("harness: disconnect dupe"));
+        }, 300, () -> {
+            Player back = Bukkit.getPlayerExact("Alice");
+            if (back == null) return "Alice did not come back " + findings();
+            a = back;
+            return flagged("Alice", 90) && diamonds(a.getInventory()) == before[0] ? null
+                    : "diamonds=" + diamonds(a.getInventory()) + " before=" + before[0] + " " + findings();
+        }));
 
         String gold = serial(keep[6]);
         steps.add(new Step("handover-copy-blames-giver", () -> {
