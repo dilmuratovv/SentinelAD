@@ -38,6 +38,9 @@ def main():
         shutil.copy2(jar, server / 'plugins' / jar.name)
     if a.mojang_cache:
         shutil.copytree(a.mojang_cache, server / 'cache')
+    if os.environ.get('SENTINEL_LIBS_SEED') and not (server / 'libraries').exists():
+        # lab only: libraries of an earlier run of this Paper version, so plugins download nothing
+        shutil.copytree(os.environ['SENTINEL_LIBS_SEED'], server / 'libraries')
     (server / 'eula.txt').write_text('eula=true\n')
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0))
