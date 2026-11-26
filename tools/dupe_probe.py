@@ -80,7 +80,7 @@ def main():
     proc, lines = start()
     ok = False
     try:
-        wait(lines, 'Done (', 300)
+        wait(lines, 'Done (', 600)
         for name in ('Alice', 'Bob'):
             bots.append(subprocess.Popen(['node', str(BOT), str(port), name, a.client_version], env=env,
                                          stdout=open(a.work / f'{name}.log', 'w'), stderr=subprocess.STDOUT))
@@ -103,7 +103,7 @@ def main():
         (server / 'plugins' / a.harness.name).unlink()
         proc, lines = start()
         try:
-            wait(lines, 'Done (', 300)
+            wait(lines, 'Done (', 600)
             time.sleep(1)
             while not lines.empty():
                 log.append(lines.get())
@@ -125,7 +125,7 @@ def crash_test(a, server, port, start, wait, stop, log, env):
         proc, lines = start()
         bots = []
         try:
-            wait(lines, 'Done (', 300)
+            wait(lines, 'Done (', 600)
             for name in ('Alice', 'Bob'):
                 bots.append(subprocess.Popen(['node', str(BOT), str(port), name, a.client_version], env=env,
                                              stdout=open(a.work / f'{name}-{n}.log', 'w'), stderr=subprocess.STDOUT))
