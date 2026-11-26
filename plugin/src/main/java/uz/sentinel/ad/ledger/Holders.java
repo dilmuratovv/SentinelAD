@@ -179,12 +179,24 @@ public final class Holders {
             // Armor stands, and mobs holding or wearing items (zombie with a sword, allay, fox, horse armor...).
             if (e instanceof LivingEntity living && living.getEquipment() != null) {
                 EntityEquipment eq = living.getEquipment();
+                boolean hasInventory = e instanceof InventoryHolder;
                 for (EquipmentSlot slot : EQUIPMENT) {
                     ItemStack s = equipment(eq, slot);
                     // Mob gear is never sealed (every skeleton's bow would fill the ledger); a copy put there is
                     // already sealed, which is what matters. Armor stands are decoration players fill: sealed as before.
                     boolean seal = stamp && e instanceof org.bukkit.entity.ArmorStand;
-                    if (s != null) scanner.collect(s, EQUIPMENT_BASE + slot.ordinal(), seal, out, () -> eq.setItem(slot, s));
+                    if (s == null) continue;
+                    if (!hasInventory) { scanner.collect(s, EQUIPMENT_BASE + slot.ordinal(), seal, out, () -> eq.setItem(slot, s)); continue; }
+                    // A horse's saddle and armor are in its inventory and in its equipment (26.x: SADDLE, BODY): one
+                    // item seen through two views is not two items, so an item the inventory scan already found
+                    // in this holder is not counted again from the equipment.
+                    List<Sighting> view = new ArrayList<>();
+                    scanner.collect(s, EQUIPMENT_BASE + slot.ordinal(), seal, view, () -> eq.setItem(slot, s));
+                    for (Sighting x : view) {
+                        boolean mirrored = false;
+                        for (Sighting seen : out) if (seen.slot() < EQUIPMENT_BASE && seen.serial().equals(x.serial())) { mirrored = true; break; }
+                        if (!mirrored) out.add(x);
+                    }
                 }
             }
         }

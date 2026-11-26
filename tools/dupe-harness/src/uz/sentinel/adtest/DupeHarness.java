@@ -439,6 +439,19 @@ public final class DupeHarness extends JavaPlugin implements Listener {
             al.getEquipment().setItemInMainHand(new ItemStack(Material.BOW));
         }), 80, () -> serial(unarmed[0].getEquipment().getItemInMainHand()) == null ? null : "the mob's bow got a seal"));
 
+        // A horse's saddle is in its inventory and (26.x) its equipment: one item, seen through two views. Skeleton
+        // horses, donkeys and llamas are the same case. It must neither be flagged nor removed.
+        org.bukkit.entity.Horse[] horse = new org.bukkit.entity.Horse[1];
+        steps.add(new Step("saddle-seen-twice-is-one-item", () -> horse[0] = w.spawn(a.getLocation().add(4, 1, -3), org.bukkit.entity.Horse.class, h -> {
+            h.setAI(false);
+            h.setTamed(true);
+            h.getInventory().setSaddle(new ItemStack(Material.SADDLE));
+        }), 160, () -> {
+            boolean kept = horse[0].getInventory().getSaddle() != null && !horse[0].getInventory().getSaddle().getType().isAir();
+            if (!kept) return "the saddle was removed: " + findings();
+            return flagged(null, 1) ? "the saddle was flagged: " + findings() : null;
+        }));
+
         String stone = serial(keep[7]);
         steps.add(new Step("legit-handover", () -> {
             ItemStack real = a.getInventory().getItem(7);

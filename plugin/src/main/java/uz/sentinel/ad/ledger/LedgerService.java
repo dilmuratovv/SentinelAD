@@ -280,8 +280,10 @@ public final class LedgerService implements Listener {
         long budget = Math.max(1, plugin.getConfig().getLong("ledger.scan-budget-ms", 2)) * 1_000_000L;
         long start = System.nanoTime();
         int limit = 400;
-        Iterator<Map.Entry<String, Supplier<Scan>>> it = queue.entrySet().iterator();
-        while (it.hasNext() && limit-- > 0 && System.nanoTime() - start < budget) {
+        while (limit-- > 0 && System.nanoTime() - start < budget) {
+            // A fresh iterator per task: processing a scan can queue further scans, which would break a live one.
+            Iterator<Map.Entry<String, Supplier<Scan>>> it = queue.entrySet().iterator();
+            if (!it.hasNext()) break;
             Supplier<Scan> task = it.next().getValue();
             it.remove();
             try {
